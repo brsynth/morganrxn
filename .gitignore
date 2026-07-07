@@ -11,3 +11,18 @@ __pycache__/
 
 # VScode
 .vscode/*
+
+# ignore data
+**/data/
+
+# ignore debug
+**/debug/
+
+# ignore results
+**/results/
+
+# ignore slurms
+**/slurms/
+
+# ignore old files
+**/old/
