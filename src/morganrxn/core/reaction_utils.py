@@ -43,28 +43,88 @@ def invert_reaction(reaction_rule):
 # =================================================================================================
 
 
-def apply_reaction(rxn, smi):
+def _get_ring_constraints(rxn):
+    """
+    For each atom-map number in the reactant templates, extract R/!R constraint.
+    Returns: {map_num: (reactant_idx, template_atom_idx, required_in_ring: bool)}
+    """
+    constraints = {}
+    for r_idx in range(rxn.GetNumReactantTemplates()):
+        tmpl = rxn.GetReactantTemplate(r_idx)
+        smarts = Chem.MolToSmarts(tmpl)
+        for match in re.finditer(r'\[([^\]]+):(\d+)\]', smarts):
+            props, map_num = match.group(1), int(match.group(2))
+            if '!R' in props:
+                required = False
+            elif re.search(r'(?<![!;,&])R(?!\d)', props):
+                required = True
+            else:
+                continue
+            for atom in tmpl.GetAtoms():
+                if atom.GetAtomMapNum() == map_num:
+                    constraints[map_num] = (r_idx, atom.GetIdx(), required)
+                    break
+    return constraints
+
+
+def _substrate_satisfies_ring_constraints(mol, rxn, constraints):
+    """
+    Check R/!R constraints on the substrate via substructure matching.
+    Product atoms lose their atom map numbers after RunReactants, so we check here.
+    Returns True if at least one match of the reactant template satisfies all constraints.
+    """
+    if not constraints:
+        return True
+    by_reactant: dict = {}
+    for map_num, (r_idx, atom_idx, required) in constraints.items():
+        by_reactant.setdefault(r_idx, []).append((atom_idx, required))
+
+    for r_idx, atom_constraints in by_reactant.items():
+        tmpl = rxn.GetReactantTemplate(r_idx)
+        matches = mol.GetSubstructMatches(tmpl)
+        if not matches:
+            return False
+        if any(
+            all(mol.GetAtomWithIdx(match[tmpl_idx]).IsInRing() == required
+                for tmpl_idx, required in atom_constraints)
+            for match in matches
+        ):
+            return True
+        return False
+    return True
+
+
+def apply_reaction(rxn, smi, filter_ring_consistency=False):
     if isinstance(rxn, str):
         rxn = rdChemReactions.ReactionFromSmarts(rxn)
     mol = Chem.MolFromSmiles(smi)
     rxn.Initialize()
+
+    if filter_ring_consistency:
+        constraints = _get_ring_constraints(rxn)
+        if constraints and not _substrate_satisfies_ring_constraints(mol, rxn, constraints):
+            return []
+
     products = rxn.RunReactants((mol,))
     product_sets = []
     for prod_tuple in products:
-        # build "A.B.C" style SMILES string for each product set
         smiles_set = []
+        valid = True
         for m in prod_tuple:
             if m is None:
                 continue
             try:
                 Chem.SanitizeMol(m)
-                smi = sanitize_smiles(Chem.MolToSmiles(m))
-                smiles_set.append(smi)
             except Exception:
-                continue
-        if smiles_set:  # avoid empty sets
+                valid = False
+                break
+            try:
+                smiles_set.append(sanitize_smiles(Chem.MolToSmiles(m)))
+            except Exception:
+                valid = False
+                break
+        if valid and smiles_set:
             product_sets.append(".".join(sorted(smiles_set)))
-    # deduplicate sets
     product_sets = list(set(product_sets))
     return product_sets
 
