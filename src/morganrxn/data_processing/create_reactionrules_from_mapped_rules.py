@@ -60,6 +60,7 @@ from rdkit import rdBase
 
 from rulesmith import SmartsFeatures, SmartsParams
 
+from morganrxn.core.molecule_utils import sanitize_smiles
 from morganrxn.core.paths import DATA_DIR
 from morganrxn.core.reaction_rules import ReactionRules
 from morganrxn.core.reaction_utils import (
@@ -341,7 +342,7 @@ def process_rule_row(
         "template_reaction": template_reaction,
         "ecfp_reaction": tuple(int(x) for x in ecfp_reaction),
         "ecfp_reaction_center": tuple(int(x) for x in ecfp_reaction_center),
-        "smi_sub": get_substrate_side(reaction),
+        "smi_sub": sanitize_smiles(get_substrate_side(reaction)),
         "nb_prod": count_products(reaction),
         "reaction_monocomp_id": reaction_id,
         "reaction_id": reaction_id,
