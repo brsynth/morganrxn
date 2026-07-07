@@ -994,6 +994,8 @@ def run_one_radius(radius, ec_level, args, ec_by_mnxr):
             database_name=args.database_name,
             ecfp_params=ecfp_params,
         )
+        reaction_rules.filter_by_smi_sub_atoms(min_atoms=5)
+        reaction_rules.drop_duplicates()
 
     with timer("Building ML samples (sparse)"):
         X_reaction, X_center, y_labels, meta = expand_reactionrules_with_ec_labels(
