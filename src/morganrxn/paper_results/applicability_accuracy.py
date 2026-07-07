@@ -47,7 +47,6 @@ RDLogger.DisableLog("rdApp.*")
 from morganrxn.core.molecule_utils import (
     get_mol_ecfp,
     sanitize_list_of_smiles,
-    sanitize_smiles,
 )
 from morganrxn.core.paths import RESULTS_DIR
 from morganrxn.core.reaction_rules import ReactionRules
@@ -183,16 +182,14 @@ def collect_unique_smi_sub(
         print("=" * 80)
         print(f"Loading ReactionRules: {database_name}")
         rr = ReactionRules.load(database_name=database_name, ecfp_params=ecfp_params)
+        rr.filter_by_smi_sub_atoms(min_atoms=5)
+        rr.drop_duplicates()
         before = len(smiles_unique)
         for smi in rr.smi_sub:
-            try:
-                smi_san = sanitize_smiles(smi)
-            except Exception:
-                smi_san = ""
-            if smi_san:
-                smiles_unique.add(smi_san)
+            if smi:
+                smiles_unique.add(smi)
         print(f"Loaded smi_sub entries: {len(list(rr.smi_sub))}")
-        print(f"Added unique sanitized SMILES: {len(smiles_unique) - before}")
+        print(f"Added unique SMILES: {len(smiles_unique) - before}")
     print(f"Total unique sanitized SMILES: {len(smiles_unique)}")
     return smiles_unique
 
@@ -370,10 +367,8 @@ def compute_ecfp_applies_accuracy(
     print(f"Loading ReactionRules: {database_name} | ecfp_params: {ecfp_params}")
     reaction_rules = ReactionRules.load(database_name=database_name, ecfp_params=ecfp_params)
 
-    if hasattr(reaction_rules, "filter_by_smi_sub_atoms"):
-        reaction_rules.filter_by_smi_sub_atoms(min_atoms=min_smi_sub_atoms, verbose=True)
-    if hasattr(reaction_rules, "drop_duplicates"):
-        reaction_rules.drop_duplicates()
+    reaction_rules.filter_by_smi_sub_atoms(min_atoms=min_smi_sub_atoms, verbose=True)
+    reaction_rules.drop_duplicates()
 
     ecfp_reaction_np = np.asarray(reaction_rules.ecfp_reaction, dtype=np.int32)
     ecfp_reaction_center_np = np.asarray(reaction_rules.ecfp_reaction_center, dtype=np.int32)
@@ -391,10 +386,7 @@ def compute_ecfp_applies_accuracy(
     for target_idx, smi_sub_raw in enumerate(smi_targets):
         n_targets_total += 1
 
-        try:
-            smi_sub = sanitize_smiles(smi_sub_raw)
-        except Exception:
-            smi_sub = ""
+        smi_sub = smi_sub_raw
 
         if not smi_sub or not valid_smiles(smi_sub):
             n_invalid_targets += 1
