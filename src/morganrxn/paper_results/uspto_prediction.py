@@ -1009,6 +1009,8 @@ def run_one_radius(
         database_name=args.database_name,
         ecfp_params=ecfp_params,
     )
+    reaction_rules.filter_by_smi_sub_atoms(min_atoms=5)
+    reaction_rules.drop_duplicates()
 
     X_reaction, X_center, y, meta = expand_reactionrules_with_labels(
         reaction_rules=reaction_rules,
@@ -1218,8 +1220,8 @@ def build_parser():
 
     parser.add_argument(
         "--dataset-path",
-        default=USPTO_DIR / "datasetB.csv",
-        help="Path to original USPTO datasetB.csv.",
+        default=USPTO_DIR / "dataSetB.csv",
+        help="Path to original USPTO dataSetB.csv.",
     )
 
     parser.add_argument(
