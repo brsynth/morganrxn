@@ -77,6 +77,12 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils.class_weight import compute_sample_weight
 
+from morganrxn.core.cli_utils import (
+    make_ecfp_params,
+    parse_radii,
+    split_merged_ids,
+    subset_X,
+)
 from morganrxn.core.paths import USPTO_DIR, RESULTS_DIR
 from morganrxn.core.reaction_rules import ReactionRules
 
@@ -91,48 +97,6 @@ warnings.filterwarnings("ignore", category=ConvergenceWarning)
 # ======================================================================================
 # General helpers
 # ======================================================================================
-
-def parse_radii(radii_value, fallback_radius):
-    """
-    Parse radii from CLI.
-
-    Priority:
-        1. --radii if provided
-        2. --radius otherwise
-
-    Example
-    -------
-    "0,1,2,3,4,5" -> [0, 1, 2, 3, 4, 5]
-    """
-    if radii_value is None or str(radii_value).strip() == "":
-        return [int(fallback_radius)]
-
-    radii = []
-
-    for x in str(radii_value).split(","):
-        x = x.strip()
-
-        if x == "":
-            continue
-
-        radii.append(int(x))
-
-    radii = sorted(set(radii))
-
-    if len(radii) == 0:
-        raise ValueError("No valid radius found.")
-
-    return radii
-
-
-def make_ecfp_params(radius: int, fp_size: int, folded: bool, custom: bool) -> dict:
-    return {
-        "radius": int(radius),
-        "fpSize": int(fp_size),
-        "folded": bool(folded),
-        "custom": bool(custom),
-    }
-
 
 def parse_models(models_value):
     """
@@ -200,31 +164,6 @@ def parse_mlp_hidden_layers(value):
 # ======================================================================================
 # ID parsing
 # ======================================================================================
-
-def split_merged_ids(value):
-    """
-    Split IDs that may have been merged by ReactionRules.drop_duplicates().
-
-    Example
-    -------
-    "US1__0__split0|US2__7__split0"
-    ->
-    ["US1__0__split0", "US2__7__split0"]
-    """
-    if value is None:
-        return []
-
-    value = str(value).strip()
-
-    if value == "":
-        return []
-
-    return [
-        x.strip()
-        for x in value.split("|")
-        if x.strip()
-    ]
-
 
 def parse_uspto_rule_id(rule_id: str):
     """
@@ -456,13 +395,6 @@ def make_shared_split_indices(
     )
 
     return train_idx, test_idx
-
-
-def subset_X(X, indices):
-    """
-    Works for dense numpy arrays and scipy sparse matrices.
-    """
-    return X[indices]
 
 
 def to_dense_float32(X):
@@ -1010,7 +942,6 @@ def run_one_radius(
         ecfp_params=ecfp_params,
     )
     reaction_rules.filter_by_smi_sub_atoms(min_atoms=5)
-    reaction_rules.drop_duplicates()
 
     X_reaction, X_center, y, meta = expand_reactionrules_with_labels(
         reaction_rules=reaction_rules,
