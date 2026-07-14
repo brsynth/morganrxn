@@ -44,6 +44,7 @@ from rdkit.Chem import Descriptors
 
 RDLogger.DisableLog("rdApp.*")
 
+from morganrxn.core.cli_utils import make_ecfp_params, parse_radii, timer
 from morganrxn.core.molecule_utils import (
     get_mol_ecfp,
     sanitize_list_of_smiles,
@@ -55,7 +56,7 @@ from morganrxn.core.reaction_utils import apply_reaction, one_step
 
 DEFAULT_RADII = [0, 1, 2, 3, 4, 5]
 DEFAULT_FP_SIZE = 1024
-DEFAULT_N_SAMPLES = 1000
+DEFAULT_N_SAMPLES = 20
 DEFAULT_MIN_HEAVY_ATOMS = 5
 DEFAULT_MIN_SMI_SUB_ATOMS = 5
 DEFAULT_MAX_MOL_WT = 1000.0
@@ -78,36 +79,6 @@ DEBUG_MAX_PRODUCTS_PER_ROW = 25
 # ======================================================================================
 # Small utilities
 # ======================================================================================
-
-
-class timer:
-    def __init__(self, label: str):
-        self.label = label
-        self.t0 = None
-
-    def __enter__(self):
-        self.t0 = time.perf_counter()
-        print(f"[start] {self.label}")
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        dt = time.perf_counter() - self.t0
-        status = "failed" if exc_type is not None else "done"
-        print(f"[{status}] {self.label}: {dt:.2f} s")
-        return False
-
-
-def make_ecfp_params(radius: int, fp_size: int, folded: bool, custom: bool) -> Dict[str, Any]:
-    return {
-        "radius": int(radius),
-        "fpSize": int(fp_size),
-        "folded": bool(folded),
-        "custom": bool(custom),
-    }
-
-
-def parse_csv_ints(value: str) -> List[int]:
-    return sorted({int(x.strip()) for x in str(value).split(",") if x.strip()})
 
 
 def parse_dataset_specs(
@@ -183,7 +154,6 @@ def collect_unique_smi_sub(
         print(f"Loading ReactionRules: {database_name}")
         rr = ReactionRules.load(database_name=database_name, ecfp_params=ecfp_params)
         rr.filter_by_smi_sub_atoms(min_atoms=5)
-        rr.drop_duplicates()
         before = len(smiles_unique)
         for smi in rr.smi_sub:
             if smi:
@@ -368,7 +338,6 @@ def compute_ecfp_applies_accuracy(
     reaction_rules = ReactionRules.load(database_name=database_name, ecfp_params=ecfp_params)
 
     reaction_rules.filter_by_smi_sub_atoms(min_atoms=min_smi_sub_atoms, verbose=True)
-    reaction_rules.drop_duplicates()
 
     ecfp_reaction_np = np.asarray(reaction_rules.ecfp_reaction, dtype=np.int32)
     ecfp_reaction_center_np = np.asarray(reaction_rules.ecfp_reaction_center, dtype=np.int32)
@@ -660,7 +629,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
 
-    radii = parse_csv_ints(args.radii)
+    radii = parse_radii(args.radii)
     folded = not args.unfolded
     benchmark_datasets = parse_dataset_specs(args.benchmark_dataset, DEFAULT_BENCHMARK_DATASETS)
     paired_rule_names = parse_dataset_specs(args.paired_rules, DEFAULT_PAIRED_RULES)
