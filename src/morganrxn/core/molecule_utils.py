@@ -1,10 +1,7 @@
 import numpy as np
-from collections import deque
 from functools import lru_cache
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdFingerprintGenerator, rdmolops
-
-from rulesmith.molecule_ops import remove_mappings, validate_compound, standardize_mol
 
 # =================================================================================================
 # Sanitize functions.
@@ -17,19 +14,13 @@ def strip_cxsmiles(smi: str) -> str:
 
 @lru_cache(maxsize=200_000)
 def _sanitize_component_cached(smi_comp, remove_stereo=True):
-    smi_comp = remove_mappings(smi_comp)
-    infos, _, _ = validate_compound(smi_comp)
-    smi_ok = infos.get("SMILES", "")
-    if not smi_ok:
-        return smi_comp
-    mol = Chem.MolFromSmiles(smi_ok)
+    mol = Chem.MolFromSmiles(smi_comp)
     if mol is None:
         return smi_comp
-    mol = standardize_mol(mol)
-    if mol is None:
-        return smi_comp
+    for atom in mol.GetAtoms():
+        atom.SetAtomMapNum(0)
     if remove_stereo:
-        return remove_stereochemistry(mol)
+        Chem.RemoveStereochemistry(mol)
     return Chem.MolToSmiles(mol)
 
 
@@ -54,76 +45,8 @@ def sanitize_list_of_smiles(list_smiles):
 
 
 # =================================================================================================
-# Molecular features extraction.
+# Local environment utilities.
 # =================================================================================================
-
-
-def extract_bond_features(mol):
-    bond_features = {}
-    for bond in mol.GetBonds():
-        begin_idx = bond.GetBeginAtomIdx()
-        end_idx = bond.GetEndAtomIdx()
-        bond_type = bond.GetBondType()  # returns rdkit.Chem.rdchem.BondType
-        is_conjugated = bond.GetIsConjugated()
-        is_in_ring = bond.IsInRing()
-        # Create a sorted tuple to ensure symmetry (i.e., (1,2) == (2,1))
-        bond_key = tuple(sorted((begin_idx, end_idx)))
-        bond_features[bond_key] = {
-            "type": str(bond_type),  # convert to string for readability
-            "conjugated": is_conjugated,
-            "ring": is_in_ring,
-        }
-    return bond_features
-
-
-def extract_atom_features(mol):
-    atom_features = {}
-    for atom in mol.GetAtoms():
-        atom_idx = atom.GetIdx()
-        atom_symbol = atom.GetSymbol()
-        total_valence = atom.GetTotalValence()
-        num_heavy_neighbors = atom.GetDegree()
-        degree = atom.GetTotalDegree()  # total number of bonded atoms (including H)
-        in_ring = atom.IsInRing()
-        is_aromatic = atom.GetIsAromatic()
-        total_hs = atom.GetTotalNumHs()  # total number of implicit + explicit Hs
-        atom_features[atom_idx] = {
-            "Type": atom_symbol,
-            "v": total_valence,
-            "H": total_hs,
-            "D": num_heavy_neighbors,
-            "X": degree,
-            "R": in_ring,
-            "Arom": is_aromatic,
-        }
-    return atom_features
-
-
-# =================================================================================================
-# Stereochemistry utilities.
-# =================================================================================================
-
-
-def remove_stereochemistry(mol):
-    if type(mol) == str:
-        mol = Chem.MolFromSmiles(mol)
-    Chem.RemoveStereochemistry(mol)
-    return Chem.MolToSmiles(mol)
-
-
-# =================================================================================================
-# Diameter and local environment utilities.
-# =================================================================================================
-
-
-def get_molecular_diameter(mol):
-    """
-    Computes the molecular diameter as the longest shortest path between any two atoms.
-    """
-    if type(mol) == str:
-        mol = Chem.MolFromSmiles(mol)
-    distance_matrix = AllChem.GetDistanceMatrix(mol)
-    return int(distance_matrix.max())
 
 
 def get_atoms_within_radius(mol, list_atoms, radius):
@@ -138,39 +61,6 @@ def get_atoms_within_radius(mol, list_atoms, radius):
         neighbors = np.where(distance_matrix[atom_idx] <= radius)[0]
         selected_atoms.update(neighbors)
     return sorted(selected_atoms)
-
-
-def max_local_environment_radius(mol: Chem.Mol, atom_indices: set, center_idx: int) -> int:
-    """
-    Compute the largest radius such that the environment around `center_idx`
-    only contains atoms from `atom_indices`.
-
-    Parameters:
-    - mol: RDKit Mol object
-    - atom_indices: set of allowed atom indices
-    - center_idx: index of the central atom
-
-    Returns:
-    - max_radius: the largest integer radius such that all atoms within
-      that radius from center_idx are in atom_indices
-    """
-    if center_idx not in atom_indices:
-        return -1  # Invalid input: center not in allowed set
-    visited = set()
-    queue = deque([(center_idx, 0)])
-    max_radius = 0
-    while queue:
-        current_atom, radius = queue.popleft()
-        if current_atom in visited:
-            continue
-        visited.add(current_atom)
-        # If we hit an atom not in atom_indices, return the previous radius
-        if current_atom not in atom_indices:
-            return radius - 1
-        max_radius = max(max_radius, radius)
-        for neighbor in mol.GetAtomWithIdx(current_atom).GetNeighbors():
-            queue.append((neighbor.GetIdx(), radius + 1))
-    return max_radius
 
 
 # =================================================================================================
