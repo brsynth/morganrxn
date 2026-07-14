@@ -1,8 +1,7 @@
-from collections import Counter
 from rdkit import Chem
 
 from morganrxn.core.molecule_utils import get_mol_ecfp, get_mol_ecfp_atom_to_bits
-from morganrxn.core.vector_utils import l1_plus_l2, l1_minus_l2, bits_to_vector
+from morganrxn.core.vector_utils import l1_minus_l2, bits_to_vector
 
 
 def compute_ecfp_prod_minus_sub(smi_prod, smi_sub, ecfp_params):
@@ -44,13 +43,3 @@ def get_ecfp_reaction_center(mol_sub, reaction_center_indices, ecfp_params):
         return [-1 * x for x in vec]
     else:
         return sorted([-1 * x for x in ecfp_bits])
-
-
-def ecfp_reaction_center_applicable(ecfp_reaction_center, ecfp_smi, ecfp_params):
-    if ecfp_params["folded"]:
-        return all(x >= 0 for x in l1_plus_l2(ecfp_reaction_center, ecfp_smi, folded=ecfp_params["folded"]))
-    else:
-        ecfp_reaction_center = [-1 * x for x in ecfp_reaction_center]
-        counter_ecfp_smi = Counter(ecfp_smi)
-        counter_ecfp_reaction = Counter(ecfp_reaction_center)
-        return all(counter_ecfp_smi[element] >= count for element, count in counter_ecfp_reaction.items())
