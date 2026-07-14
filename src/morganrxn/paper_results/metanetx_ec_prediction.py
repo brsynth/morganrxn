@@ -68,11 +68,10 @@ import argparse
 import gc
 import json
 import re
-import time
 import traceback
 import warnings
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -94,6 +93,14 @@ from sklearn.multiclass import OneVsRestClassifier
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import MultiLabelBinarizer, StandardScaler
 
+from morganrxn.core.cli_utils import (
+    make_ecfp_params,
+    parse_csv_list,
+    parse_radii,
+    split_merged_ids,
+    subset_X,
+    timer,
+)
 from morganrxn.core.paths import DATA_DIR, RESULTS_DIR
 from morganrxn.core.reaction_rules import ReactionRules
 
@@ -112,36 +119,6 @@ RARE_PRIMARY_BUCKET = "__rare_primary__"
 # ======================================================================================
 
 
-class timer:
-    def __init__(self, label: str):
-        self.label = label
-        self.t0 = None
-
-    def __enter__(self):
-        self.t0 = time.perf_counter()
-        print(f"[start] {self.label}")
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        dt = time.perf_counter() - self.t0
-        status = "failed" if exc_type is not None else "done"
-        print(f"[{status}] {self.label}: {dt:.2f} s")
-        return False
-
-
-def parse_csv_list(value: str) -> List[str]:
-    return [x.strip() for x in str(value).split(",") if x.strip()]
-
-
-def parse_radii(radii_value: Optional[str], fallback_radius: int) -> List[int]:
-    if radii_value is None or str(radii_value).strip() == "":
-        return [int(fallback_radius)]
-    radii = sorted({int(x.strip()) for x in str(radii_value).split(",") if x.strip()})
-    if not radii:
-        raise ValueError("No valid radius found.")
-    return radii
-
-
 def parse_ec_levels(ec_levels_value: Optional[str], fallback_ec_level: int) -> List[int]:
     if ec_levels_value is None or str(ec_levels_value).strip() == "":
         return [int(fallback_ec_level)]
@@ -152,24 +129,6 @@ def parse_ec_levels(ec_levels_value: Optional[str], fallback_ec_level: int) -> L
         if lvl not in (1, 2, 3, 4):
             raise ValueError(f"Invalid EC level {lvl}: must be one of 1, 2, 3, 4.")
     return ec_levels
-
-
-def make_ecfp_params(radius: int, fp_size: int, folded: bool, custom: bool) -> dict:
-    return {
-        "radius": int(radius),
-        "fpSize": int(fp_size),
-        "folded": bool(folded),
-        "custom": bool(custom),
-    }
-
-
-def split_merged_ids(value) -> List[str]:
-    if value is None:
-        return []
-    value = str(value).strip()
-    if not value:
-        return []
-    return [x.strip() for x in value.split("|") if x.strip()]
 
 
 def extract_mnxr_id(value) -> Optional[str]:
@@ -222,10 +181,6 @@ def stack_sparse_rows(rows: List[sparse.csr_matrix], n_features: int) -> sparse.
     if not rows:
         return sparse.csr_matrix((0, n_features), dtype=np.float32)
     return sparse.vstack(rows, format="csr", dtype=np.float32)
-
-
-def subset_X(X, indices):
-    return X[indices]
 
 
 # ======================================================================================
@@ -647,17 +602,6 @@ def ensure_at_least_one_label(Y_pred, Y_train=None, scores=None):
     return Y_pred
 
 
-def get_scores(model, X):
-    if hasattr(model, "decision_function"):
-        return np.asarray(model.decision_function(X))
-    if hasattr(model, "predict_proba"):
-        proba = model.predict_proba(X)
-        if isinstance(proba, list):
-            return np.vstack([p[:, 1] if p.shape[1] > 1 else np.zeros(p.shape[0]) for p in proba]).T
-        return np.asarray(proba)
-    return None
-
-
 def get_multioutput_proba_scores(model, X_test, n_labels):
     """Return an n_samples x n_labels probability-like score matrix if possible."""
     try:
@@ -995,7 +939,6 @@ def run_one_radius(radius, ec_level, args, ec_by_mnxr):
             ecfp_params=ecfp_params,
         )
         reaction_rules.filter_by_smi_sub_atoms(min_atoms=5)
-        reaction_rules.drop_duplicates()
 
     with timer("Building ML samples (sparse)"):
         X_reaction, X_center, y_labels, meta = expand_reactionrules_with_ec_labels(
