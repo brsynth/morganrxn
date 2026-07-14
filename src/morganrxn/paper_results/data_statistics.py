@@ -39,6 +39,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from morganrxn.core.cli_utils import make_ecfp_params, parse_radii
 from morganrxn.core.paths import RESULTS_DIR
 from morganrxn.core.reaction_rules import ReactionRules
 
@@ -46,31 +47,6 @@ from morganrxn.core.reaction_rules import ReactionRules
 # ======================================================================================
 # Helpers
 # ======================================================================================
-
-def parse_radii(value: str):
-    radii = []
-
-    for x in str(value).split(","):
-        x = x.strip()
-        if x:
-            radii.append(int(x))
-
-    radii = sorted(set(radii))
-
-    if not radii:
-        raise ValueError("No valid radius found.")
-
-    return radii
-
-
-def make_ecfp_params(radius: int, fp_size: int, folded: bool, custom: bool) -> dict:
-    return {
-        "radius": int(radius),
-        "fpSize": int(fp_size),
-        "folded": bool(folded),
-        "custom": bool(custom),
-    }
-
 
 def vector_to_key(vector):
     """
@@ -276,7 +252,6 @@ def main():
             ecfp_params=ecfp_params,
         )
         metanetx_rules.filter_by_smi_sub_atoms(min_atoms=5)
-        metanetx_rules.drop_duplicates()
 
         print("Loading USPTO ReactionRules...")
         uspto_rules = ReactionRules.load(
@@ -284,7 +259,6 @@ def main():
             ecfp_params=ecfp_params,
         )
         uspto_rules.filter_by_smi_sub_atoms(min_atoms=5)
-        uspto_rules.drop_duplicates()
 
         rows = compute_overlap_stats(
             metanetx_rules=metanetx_rules,
