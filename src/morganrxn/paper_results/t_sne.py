@@ -109,7 +109,6 @@ def load_ecfps(
         print(f"Loading {dataset_name} ...")
         reaction_rules = ReactionRules.load(database_name=dataset_name, ecfp_params=ecfp_params)
         reaction_rules.filter_by_smi_sub_atoms(min_atoms=min_smi_sub_atoms, verbose=True)
-        reaction_rules.drop_duplicates()
 
         if vector_type == "reaction":
             ecfps = np.asarray(reaction_rules.ecfp_reaction)
