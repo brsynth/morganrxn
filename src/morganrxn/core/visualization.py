@@ -41,7 +41,7 @@ def plot_mol_ecfp(mol, ecfp_params, img_size=600, font_size=15, use_svg=False, h
         if highlight_atoms is None or i_rdkit in highlight_atoms:
             symbol = atom.GetSymbol()
             if len(morgan_bits) == 0:
-                #i_smarts = atom.GetAtomMapNum()
+                i_smarts = atom.GetAtomMapNum()
                 #atom_label = f"{symbol}({i_rdkit},{i_smarts}):" + ",".join(map(str, atoms_morgan_bits.get(i_rdkit, [])))
                 atom_label = f"{symbol}" 
                 if put_indices:
@@ -51,7 +51,12 @@ def plot_mol_ecfp(mol, ecfp_params, img_size=600, font_size=15, use_svg=False, h
             else:
                 atom_label = f"{symbol}"
                 if put_indices:
-                    atom_label = atom_label + f"{i_rdkit}"
+                    #atom_label = atom_label + f"{i_rdkit}"
+                    try:
+                        i_smarts = atom.GetAtomMapNum()
+                        atom_label = atom_label + f"{i_rdkit},{i_smarts}" 
+                    except:
+                        atom_label = atom_label + f"{i_rdkit}"
                 atom_label = atom_label + ":"
                 atom_morgan_bits = atoms_morgan_bits.get(i_rdkit, [])
                 if len([x for x in atom_morgan_bits if x in morgan_bits]) > 0:
