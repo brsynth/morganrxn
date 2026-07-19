@@ -66,6 +66,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import hashlib
 import json
 import re
 import traceback
@@ -88,7 +89,11 @@ from sklearn.metrics import (
     precision_score,
     recall_score,
 )
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import (
+    GroupShuffleSplit,
+    StratifiedGroupKFold,
+    train_test_split,
+)
 from sklearn.multiclass import OneVsRestClassifier
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import MultiLabelBinarizer, StandardScaler
@@ -437,11 +442,46 @@ def grouped_stratify_labels(primary: np.ndarray, min_count_for_stratify: int) ->
     return grouped
 
 
+def make_group_ids(X_reaction, X_center) -> np.ndarray:
+    """Assign one group id per unique feature vector.
+
+    ReactionRules are deduplicated on (template, reaction ECFP, reaction-center
+    ECFP), but distinct rules can still share the same (reaction ECFP,
+    reaction-center ECFP), which are the only features the classifiers see.
+    Grouping on the concatenated feature vector keeps every copy on the same
+    side of the train/test split, so no vector is both trained and tested on.
+    """
+    Xr = sparse.csr_matrix(X_reaction)
+    Xc = sparse.csr_matrix(X_center)
+
+    mapping: Dict[bytes, int] = {}
+    groups = np.empty(Xr.shape[0], dtype=np.int64)
+
+    for i in range(Xr.shape[0]):
+        rr = slice(Xr.indptr[i], Xr.indptr[i + 1])
+        cc = slice(Xc.indptr[i], Xc.indptr[i + 1])
+        payload = (
+            Xr.indices[rr].tobytes() + Xr.data[rr].tobytes()
+            + b"|"
+            + Xc.indices[cc].tobytes() + Xc.data[cc].tobytes()
+        )
+        key = hashlib.blake2b(payload, digest_size=16).digest()
+
+        group_id = mapping.get(key)
+        if group_id is None:
+            group_id = len(mapping)
+            mapping[key] = group_id
+        groups[i] = group_id
+
+    return groups
+
+
 def split_raw_indices(
     y_labels: Sequence[Tuple[str, ...]],
     test_size: float,
     random_state: int,
     min_count_for_stratify: int = 2,
+    groups: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Split sample indices into train/test *before* any EC-label vocabulary
     filtering. Stratification uses the first (sorted) raw EC label per
@@ -450,6 +490,11 @@ def split_raw_indices(
     Performing this split first, then choosing the kept EC-label vocabulary
     from the training half only, avoids leaking test-set label-frequency
     information into the choice of which EC labels are even considered.
+
+    When ``groups`` is given, samples sharing a feature vector are kept on the
+    same side of the split, so no vector is both trained and tested on. The
+    test fraction is then approximated by 1 / round(1 / test_size), since
+    grouped splitting proceeds fold by fold.
     """
     n = len(y_labels)
     indices = np.arange(n)
@@ -459,12 +504,32 @@ def split_raw_indices(
     if stratify is None:
         print("WARNING: non-stratified raw split used (too few examples per primary EC label, even after grouping).")
 
-    return train_test_split(
-        indices,
-        test_size=test_size,
-        random_state=random_state,
-        stratify=stratify,
+    if groups is None:
+        return train_test_split(
+            indices,
+            test_size=test_size,
+            random_state=random_state,
+            stratify=stratify,
+        )
+
+    n_splits = max(2, int(round(1.0 / test_size)))
+
+    if stratify is not None:
+        try:
+            splitter = StratifiedGroupKFold(
+                n_splits=n_splits, shuffle=True, random_state=random_state
+            )
+            return next(splitter.split(indices, stratify, groups=groups))
+        except ValueError as exc:
+            print(
+                "WARNING: StratifiedGroupKFold failed "
+                f"({exc}); falling back to an unstratified grouped split."
+            )
+
+    splitter = GroupShuffleSplit(
+        n_splits=1, test_size=test_size, random_state=random_state
     )
+    return next(splitter.split(indices, groups=groups))
 
 
 def binarize_labels_from_train_vocabulary(
@@ -953,12 +1018,24 @@ def run_one_radius(radius, ec_level, args, ec_by_mnxr):
     gc.collect()
 
     with timer("Splitting raw indices (before label-vocabulary filtering)"):
+        groups = None
+        if args.split_mode == "group":
+            groups = make_group_ids(X_reaction, X_center)
+            print("split_mode: group")
+            print("unique feature vectors:", len(np.unique(groups)), "/", len(y_labels))
+
         raw_train_idx, raw_test_idx = split_raw_indices(
             y_labels=y_labels,
             test_size=args.test_size,
             random_state=args.random_state,
             min_count_for_stratify=args.min_count_for_stratify,
+            groups=groups,
         )
+
+        if groups is not None:
+            n_shared = len(np.intersect1d(groups[raw_train_idx], groups[raw_test_idx]))
+            print("feature vectors in both train and test:", n_shared)
+            print("raw test fraction:", round(len(raw_test_idx) / len(y_labels), 4))
 
     with timer("Choosing EC-label vocabulary from the training split and binarizing"):
         Y_all, mlb, keep_sample, label_counts = binarize_labels_from_train_vocabulary(
@@ -1152,6 +1229,17 @@ def build_parser():
         "--sample-mode",
         choices=["unique_rules", "occurrences"],
         default="unique_rules",
+    )
+    parser.add_argument(
+        "--split-mode",
+        choices=["group", "sample"],
+        default="group",
+        help=(
+            "How to build the train/test split. 'group' keeps all samples "
+            "sharing a feature vector on the same side, so no vector is both "
+            "trained and tested on. 'sample' splits each sample independently "
+            "(previous behaviour)."
+        ),
     )
     parser.add_argument("--unfolded", action="store_true")
     parser.add_argument("--custom", action="store_true")
