@@ -22,7 +22,8 @@ Compare MetaNetX and USPTO with signed split encoding and Jaccard distance:
 python t_sne.py \
     --datasets metanetx uspto \
     --encoding signed_split \
-    --metric jaccard
+    --metric jaccard \
+    --init random
 
 Save coordinates as .npz files:
 python t_sne.py --save-coords
@@ -269,6 +270,30 @@ def run_tsne(
     return tsne.fit_transform(X)
 
 
+def robust_limits(
+    coords: np.ndarray,
+    quantile: float = 0.999,
+    margin: float = 0.03,
+) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    """
+    Compute axis limits that ignore extreme outliers.
+
+    A handful of stray points can sit far outside the main cloud and squash
+    the rest of the figure. Limits come from a symmetric quantile range
+    instead of the raw min/max, padded by `margin`.
+    """
+    lo = np.quantile(coords, 1.0 - quantile, axis=0)
+    hi = np.quantile(coords, quantile, axis=0)
+
+    span = hi - lo
+    pad = margin * np.where(span > 0, span, 1.0)
+
+    lo = lo - pad
+    hi = hi + pad
+
+    return (float(lo[0]), float(hi[0])), (float(lo[1]), float(hi[1]))
+
+
 def plot_tsne(
     coords: np.ndarray,
     labels: np.ndarray,
@@ -277,8 +302,17 @@ def plot_tsne(
     point_size: float = 2.0,
     alpha: float = 0.5,
     dpi: int = 300,
+    clip_quantile: float | None = 0.999,
 ) -> None:
-    """Plot and save a t-SNE scatter plot."""
+    """
+    Plot and save a t-SNE scatter plot.
+
+    clip_quantile:
+        If set, the view is cropped to this symmetric quantile range so that
+        stray outliers do not compress the main cloud. Clipped points are
+        still part of the embedding, they are simply outside the view.
+        Set to None to show the full extent.
+    """
     plt.figure(figsize=(9, 9))
 
     for label in sorted(np.unique(labels)):
@@ -290,6 +324,21 @@ def plot_tsne(
             alpha=alpha,
             label=label,
         )
+
+    if clip_quantile is not None:
+        (x_lo, x_hi), (y_lo, y_hi) = robust_limits(coords, quantile=clip_quantile)
+        n_clipped = int(
+            np.sum(
+                (coords[:, 0] < x_lo)
+                | (coords[:, 0] > x_hi)
+                | (coords[:, 1] < y_lo)
+                | (coords[:, 1] > y_hi)
+            )
+        )
+        plt.xlim(x_lo, x_hi)
+        plt.ylim(y_lo, y_hi)
+        if n_clipped:
+            print(f"  {n_clipped} outlier point(s) outside the plotted view")
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
 
@@ -325,6 +374,7 @@ def run_tsne_workflow(
     point_size: float,
     alpha: float,
     dpi: int,
+    clip_quantile: float | None = 0.999,
     min_smi_sub_atoms: int = DEFAULT_MIN_SMI_SUB_ATOMS,
 ) -> None:
     """Run the full t-SNE workflow for one vector type."""
@@ -372,6 +422,7 @@ def run_tsne_workflow(
         point_size=point_size,
         alpha=alpha,
         dpi=dpi,
+        clip_quantile=clip_quantile,
     )
 
     if output_coords is not None:
@@ -422,7 +473,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--perplexity", type=float, default=50.0)
     parser.add_argument("--learning-rate", default="auto")
-    parser.add_argument("--init", default="random", choices=["random", "pca"])
+    parser.add_argument(
+        "--init",
+        default="pca",
+        choices=["random", "pca"],
+        help=(
+            "t-SNE initialization. 'pca' preserves global structure and avoids "
+            "stray points left behind by early exaggeration. Use 'random' with "
+            "metric='jaccard'."
+        ),
+    )
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument("--n-jobs", type=int, default=-1)
 
@@ -453,6 +513,16 @@ def parse_args() -> argparse.Namespace:
         help="Save t-SNE coordinates and labels as compressed .npz files.",
     )
 
+    parser.add_argument(
+        "--clip-quantile",
+        type=float,
+        default=0.999,
+        help=(
+            "Crop the plotted view to this symmetric quantile range so stray "
+            "outliers do not squash the main cloud. Use 1.0 to disable."
+        ),
+    )
+
     parser.add_argument("--point-size", type=float, default=2.0)
     parser.add_argument("--alpha", type=float, default=0.5)
     parser.add_argument("--dpi", type=int, default=300)
@@ -468,6 +538,10 @@ def main() -> None:
         learning_rate: str | float = "auto"
     else:
         learning_rate = float(args.learning_rate)
+
+    clip_quantile: float | None = (
+        None if args.clip_quantile >= 1.0 else args.clip_quantile
+    )
 
     output_dir: Path = args.output_dir
 
@@ -515,6 +589,7 @@ def main() -> None:
             point_size=args.point_size,
             alpha=args.alpha,
             dpi=args.dpi,
+            clip_quantile=clip_quantile,
             min_smi_sub_atoms=args.min_smi_sub_atoms,
         )
 
@@ -540,6 +615,7 @@ def main() -> None:
             point_size=args.point_size,
             alpha=args.alpha,
             dpi=args.dpi,
+            clip_quantile=clip_quantile,
             min_smi_sub_atoms=args.min_smi_sub_atoms,
         )
 
