@@ -50,6 +50,7 @@ Spyder/IPython:
 """
 
 import argparse
+import hashlib
 import json
 import re
 import warnings
@@ -71,7 +72,11 @@ from sklearn.metrics import (
     confusion_matrix,
     f1_score,
 )
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import (
+    GroupShuffleSplit,
+    StratifiedGroupKFold,
+    train_test_split,
+)
 from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
@@ -366,14 +371,53 @@ def make_feature_sets(
     }
 
 
+def make_group_ids(X_reaction, X_center):
+    """
+    Assign one group id per unique feature vector.
+
+    ReactionRules are deduplicated on (template, reaction ECFP, reaction-center
+    ECFP) but expanded back to one sample per source reaction, so identical
+    feature vectors occur several times. Grouping on the vector itself keeps
+    every copy on the same side of the train/test split.
+
+    Grouping on the vector rather than on the rule index also merges rules that
+    differ only by template but share both fingerprints, which are
+    indistinguishable to the classifiers.
+    """
+    mapping = {}
+    groups = np.empty(len(X_reaction), dtype=np.int64)
+
+    for i in range(len(X_reaction)):
+        key = hashlib.blake2b(
+            X_reaction[i].tobytes() + X_center[i].tobytes(),
+            digest_size=16,
+        ).digest()
+
+        group_id = mapping.get(key)
+
+        if group_id is None:
+            group_id = len(mapping)
+            mapping[key] = group_id
+
+        groups[i] = group_id
+
+    return groups
+
+
 def make_shared_split_indices(
     y,
     test_size: float,
     random_state: int,
+    groups=None,
 ):
     """
     Create one shared train/test split for every model and every feature set.
     This makes the comparison fair.
+
+    When groups is given, samples sharing a feature vector are kept on the same
+    side of the split, so no vector is both trained and tested on. The test
+    fraction is then approximated by 1 / round(1 / test_size), since grouped
+    splitting proceeds fold by fold.
     """
     indices = np.arange(len(y))
 
@@ -387,12 +431,28 @@ def make_shared_split_indices(
         )
         stratify = None
 
-    train_idx, test_idx = train_test_split(
-        indices,
-        test_size=test_size,
-        random_state=random_state,
-        stratify=stratify,
-    )
+    if groups is None:
+        return train_test_split(
+            indices,
+            test_size=test_size,
+            random_state=random_state,
+            stratify=stratify,
+        )
+
+    if stratify is None:
+        splitter = GroupShuffleSplit(
+            n_splits=1,
+            test_size=test_size,
+            random_state=random_state,
+        )
+    else:
+        splitter = StratifiedGroupKFold(
+            n_splits=max(2, int(round(1.0 / test_size))),
+            shuffle=True,
+            random_state=random_state,
+        )
+
+    train_idx, test_idx = next(splitter.split(indices, y, groups=groups))
 
     return train_idx, test_idx
 
@@ -966,17 +1026,31 @@ def run_one_radius(
         use_sparse=use_sparse,
     )
 
+    groups = None
+
+    if args.split_mode == "group":
+        groups = make_group_ids(X_reaction, X_center)
+
     train_idx, test_idx = make_shared_split_indices(
         y=y,
         test_size=args.test_size,
         random_state=args.random_state,
+        groups=groups,
     )
 
     print()
     print("Shared train/test split")
     print("=======================")
+    print("split_mode:", args.split_mode)
     print("n_train:", len(train_idx))
     print("n_test:", len(test_idx))
+    print("test fraction:", round(len(test_idx) / len(y), 4))
+
+    if groups is not None:
+        n_shared = len(np.intersect1d(groups[train_idx], groups[test_idx]))
+
+        print("unique feature vectors:", len(np.unique(groups)))
+        print("feature vectors in both train and test:", n_shared)
 
     metrics_rows = []
     results_by_model = {}
@@ -1176,6 +1250,18 @@ def build_parser():
     )
 
     parser.add_argument(
+        "--split-mode",
+        choices=["group", "sample"],
+        default="group",
+        help=(
+            "How to build the train/test split. 'group' keeps all samples "
+            "sharing a feature vector on the same side, so no vector is both "
+            "trained and tested on. 'sample' splits each sample independently "
+            "(previous behaviour)."
+        ),
+    )
+
+    parser.add_argument(
         "--max-rules",
         type=int,
         default=None,
@@ -1372,6 +1458,7 @@ def main():
     print("database_name:", args.database_name)
     print("dataset_path:", dataset_path)
     print("class_col:", args.class_col)
+    print("split_mode:", args.split_mode)
     print("base_output_dir:", base_output_dir)
     print("summary_output:", summary_output)
     print("requested_models:", requested_models)
