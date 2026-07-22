@@ -11,6 +11,9 @@ For each ECFP radius h, the script loads ReactionRules for two databases and com
     - number of unique reaction-center ECFP vectors in MetaNetX
     - number of unique reaction-center ECFP vectors in USPTO
     - number of shared reaction-center ECFP vectors
+    - number of unique templates in MetaNetX
+    - number of unique templates in USPTO
+    - number of shared templates
 
 Outputs:
     1. CSV file with one row per radius and representation
@@ -76,7 +79,17 @@ def compute_overlap_stats(metanetx_rules, uspto_rules, radius: int):
     mnx_center = unique_vector_set(metanetx_rules.ecfp_reaction_center)
     usp_center = unique_vector_set(uspto_rules.ecfp_reaction_center)
 
+    mnx_template = set(metanetx_rules.template_reaction)
+    usp_template = set(uspto_rules.template_reaction)
+
     rows = [
+        {
+            "radius": int(radius),
+            "representation": "Template",
+            "metanetx_unique_vectors": len(mnx_template),
+            "uspto_unique_vectors": len(usp_template),
+            "shared_vectors": len(mnx_template & usp_template),
+        },
         {
             "radius": int(radius),
             "representation": "Reaction ECFP",
@@ -117,9 +130,9 @@ def print_latex_table(df: pd.DataFrame, fp_size: int):
     print(r"\toprule")
     print(
         r"Radius & Representation "
-        r"& MetaNetX unique vectors "
-        r"& USPTO-50k unique vectors "
-        r"& Shared vectors \\")
+        r"& MetaNetX unique entries "
+        r"& USPTO-50k unique entries "
+        r"& Shared entries \\")
     print(r"\midrule")
 
     for radius in sorted(df["radius"].unique()):
