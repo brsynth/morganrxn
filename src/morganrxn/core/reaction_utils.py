@@ -292,6 +292,7 @@ def apply_reaction(
     filter_ring_consistency=False,
     check_product_consistency=True,
     check_change_within_template=True,
+    keep_spectators=True,
 ):
     if isinstance(rxn, str):
         rxn = rdChemReactions.ReactionFromSmarts(rxn)
@@ -316,6 +317,15 @@ def apply_reaction(
         if len(frags) < n_templates:
             return []
         reactant_tuples = permutations(frags, n_templates)
+
+    # RunReactants only emits the fragment(s) it matched: any fully unmatched
+    # spectator fragment of the substrate is dropped from the product. That
+    # silently corrupts the reaction ECFP (product - substrate) with a spurious
+    # -ECFP(spectator) term. When keep_spectators is set we re-attach every
+    # substrate fragment the reaction never touched.
+    if keep_spectators and n_templates <= 1:
+        mono_frag_atoms = Chem.GetMolFrags(mol)
+        mono_frag_mols = Chem.GetMolFrags(mol, asMols=True, sanitizeFrags=True)
 
     product_sets = []
     for reactants in reactant_tuples:
@@ -353,10 +363,51 @@ def apply_reaction(
                 except Exception:
                     valid = False
                     break
-            if valid and smiles_set:
+            if not valid:
+                continue
+
+            if keep_spectators:
+                spectators = _spectator_fragments(
+                    n_templates, sanitized, mol if n_templates <= 1 else None,
+                    mono_frag_atoms if n_templates <= 1 else None,
+                    mono_frag_mols if n_templates <= 1 else None,
+                    frags if n_templates > 1 else None, reactants,
+                )
+                smiles_set.extend(spectators)
+
+            if smiles_set:
                 product_sets.append(".".join(sorted(smiles_set)))
     product_sets = list(set(product_sets))
     return product_sets
+
+
+def _spectator_fragments(n_templates, product_mols, mono_mol, mono_frag_atoms,
+                         mono_frag_mols, frags, reactants):
+    """
+    SMILES of the substrate fragments left untouched by the reaction, so they can
+    be re-attached to the product (see keep_spectators in apply_reaction).
+
+    For a single-reactant template the whole substrate is passed to RunReactants,
+    so a fragment is a spectator when none of its atoms survive into the product
+    (i.e. no product atom carries its index in ``react_atom_idx``). For a
+    multi-reactant template the spectators are simply the substrate fragments not
+    assigned to any reactant template in this permutation.
+    """
+    out = []
+    if n_templates <= 1:
+        reacted = set()
+        for m in product_mols:
+            for a in m.GetAtoms():
+                if a.HasProp('react_atom_idx'):
+                    reacted.add(int(a.GetProp('react_atom_idx')))
+        for atom_idx, frag_mol in zip(mono_frag_atoms, mono_frag_mols):
+            if not (set(atom_idx) & reacted):
+                out.append(sanitize_smiles(Chem.MolToSmiles(frag_mol)))
+    else:
+        for f in frags:
+            if all(f is not r for r in reactants):
+                out.append(sanitize_smiles(Chem.MolToSmiles(f)))
+    return out
 
 
 # =================================================================================================
@@ -388,102 +439,36 @@ def has_matter_loss(reaction_rule):
     return len(find_matter_loss(reaction_rule)) > 0
 
 
-def _expected_max_valence(atomic_num: int, charge: int, is_aromatic: bool) -> int:
+def substrate_atoms_with_free_valence(reaction_rule):
     """
-    Heuristic 'max expected valence' used to decide if a query atom could
-    accept more bonds than those explicitly specified in the template.
-    Adjusts a bit for charge and common organics.
-    """
-    pt = Chem.GetPeriodicTable()
-    # RDKit valence list (possible valences). Pick a sensible upper bound.
-    vals = list(pt.GetValenceList(atomic_num))
-    if not vals:
-        return 4  # fallback for weird cases
-    # Common-sense tweaks for frequent elements
-    if atomic_num == 1:
-        return 1
-    if atomic_num == 6:  # carbon
-        # Aromatic C usually degree 3 max (three bonds counting 1.5 won't map well to integers)
-        return 4
-    if atomic_num == 7:  # nitrogen
-        # Neutral N often 3; quaternary ammonium is 4
-        if charge > 0:
-            return 4
-        return 3
-    if atomic_num == 8:  # oxygen
-        return 2
-    if atomic_num == 16:  # sulfur (keep generous)
-        return 6
-    if atomic_num == 15:  # phosphorus
-        return 5
-    # Fallback: take the max listed valence, but keep it reasonable
-    vmax = max(vals)
-    # Mild adjustment: for positive charge, allow one more if it seems plausible
-    if charge > 0 and vmax < 4:
-        vmax = min(4, vmax + 1)
-    return int(vmax)
+    Atom-map numbers of substrate atoms carrying an unsatisfied valence, i.e. a
+    dangling bonding position where an external substituent could be attached.
 
-def _bond_order_sum(atom: Chem.Atom) -> float:
-    """Sum the numeric bond orders (aromatic=1.5) for bonds present in the template."""
-    s = 0.0
-    for b in atom.GetBonds():
-        s += b.GetBondTypeAsDouble()
-    return s
-
-def _explicit_H_in_query(atom: Chem.Atom) -> int:
+    Atom-mapped reactions write every hydrogen explicitly, so an atom whose
+    specified bonds and hydrogens do not saturate its valence is not completed by
+    implicit hydrogens but left with radical electrons after sanitization.
+    Detecting these radical electrons is therefore an exact, charge-aware test for
+    "open" atoms. This replaces an earlier fixed per-element maximum-valence
+    table, which mis-flagged saturated species: terminal anions (carboxylate or
+    phosphate ``[O-]``, ``[S-]``, ...) were judged under-valent because the table
+    ignored formal charge, and ordinary hypervalent atoms (e.g. thioether sulfur
+    at valence 2) were flagged against an over-generous maximum.
     """
-    For SMARTS/query atoms, GetTotalNumHs() returns specified H count if constrained (e.g., [NH2], [CH3]).
-    If unspecified, it tends to be 0 (which is fine for our 'could accept more' check).
-    """
-    try:
-        return int(atom.GetTotalNumHs())
-    except Exception:
-        return 0
-
-def reactant_atoms_not_fully_specified(reaction_smarts: str):
-    """
-    Inputs:
-        reaction_smarts: RDKit reaction SMARTS with atom maps on both sides.
-    Returns:
-        dict with:
-          - 'by_reactant': {reactant_index: [mapped_atom_numbers_not_fully_specified]}
-          - 'flat': sorted list of all mapped atoms (tuples (reactant_index, mapnum)) not fully specified
-          - 'details': per atom diagnostic with used_valence and expected_max_valence
-    """
-    rxn = rdChemReactions.ReactionFromSmarts(reaction_smarts)
-    if rxn is None:
-        raise ValueError("Could not parse reaction SMARTS.")
-    reactants = rxn.GetReactants()
-    out_by_reactant = {}
-    flat = []
-    details = []  # (react_idx, mapnum, symbol, used, vmax, reason)
-    for r_idx, tmpl in enumerate(reactants):
-        not_full = []
-        for atom in tmpl.GetAtoms():
-            amap = atom.GetAtomMapNum()
-            if amap <= 0:
-                # Skip unmapped atoms (you said all are mapped, but just in case)
-                continue
-            sym = atom.GetSymbol()
-            charge = atom.GetFormalCharge()
-            is_arom = atom.GetIsAromatic()
-            # what the template explicitly connects:
-            used = _bond_order_sum(atom) + _explicit_H_in_query(atom)
-            vmax = _expected_max_valence(atom.GetAtomicNum(), charge, is_arom)
-            # If used < vmax, the template leaves room for more attachment(s)
-            not_fully_specified = used < vmax - 1e-6  # small tolerance
-
-            if not_fully_specified:
-                not_full.append(amap)
-                flat.append((r_idx, amap))
-                details.append(
-                    dict(reactant_index=r_idx, atom_map=amap, symbol=sym,
-                         used_valence=used, expected_max_valence=vmax,
-                         neighbors_in_template=[n.GetAtomMapNum() for n in atom.GetNeighbors()])
-                )
-        out_by_reactant[r_idx] = sorted(not_full)
-    flat.sort(key=lambda x: (x[0], x[1]))
-    return {"by_reactant": out_by_reactant, "flat": flat, "details": details}
+    substrate = reaction_rule.split(">>", 1)[0]
+    mol = Chem.MolFromSmiles(substrate)
+    if mol is None:
+        mol = Chem.MolFromSmiles(substrate, sanitize=False)
+        if mol is None:
+            return set()
+        try:
+            Chem.SanitizeMol(mol)
+        except Exception:
+            pass
+    return {
+        atom.GetAtomMapNum()
+        for atom in mol.GetAtoms()
+        if atom.GetAtomMapNum() > 0 and atom.GetNumRadicalElectrons() > 0
+    }
 
 
 def has_open_matter_loss(reaction_rule, verbose=False):
@@ -491,11 +476,11 @@ def has_open_matter_loss(reaction_rule, verbose=False):
     atoms_disappearing = find_matter_loss(reaction_rule)
     if len(atoms_disappearing) == 0:
         return False
-    atoms_not_fully_specified = [atom[1] for atom in reactant_atoms_not_fully_specified(reaction_rule)["flat"]]
+    atoms_with_free_valence = substrate_atoms_with_free_valence(reaction_rule)
+    intersection = atoms_disappearing & atoms_with_free_valence
     if verbose:
         print("atoms_disappearing", atoms_disappearing)
-        print("atoms_not_fully_specified", atoms_not_fully_specified)
-    intersection = [atom for atom in atoms_disappearing if atom in atoms_not_fully_specified]
+        print("atoms_with_free_valence", atoms_with_free_valence)
     return len(intersection) > 0
 
 
