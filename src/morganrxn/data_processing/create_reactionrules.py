@@ -69,7 +69,6 @@ from morganrxn.core.paths import DATA_DIR
 from morganrxn.core.reaction_rules import ReactionRules
 from morganrxn.core.reaction_utils import (
     deduplicate_reaction,
-    has_matter_loss,
     has_open_matter_loss,
     process_a_reaction,
     remove_constant_components,
@@ -223,7 +222,10 @@ def process_monosubstrate_reaction(
     if filter_open_matter_loss:
         try:
             with suppress_stderr_fd(), rdBase.BlockLogs():
-                if has_matter_loss(reaction) and has_open_matter_loss(reaction):
+                # has_open_matter_loss already computes matter loss internally and
+                # returns False when there is none, so no separate has_matter_loss
+                # check is needed here.
+                if has_open_matter_loss(reaction):
                     return False, {
                         "id": reaction_id,
                         "reaction": reaction,
