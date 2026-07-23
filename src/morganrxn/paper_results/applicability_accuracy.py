@@ -15,6 +15,16 @@ The evaluated criterion is:
 The case is correct if applying the corresponding template to S produces at
 least one product P such that ECFP(P) == predicted_ecfp.
 
+By default the benchmark is run for two applicability criteria so their numbers
+can be compared side by side (see ``--applicability-modes``):
+
+    - ``reaction_center``: a rule is applicable to S when S contains the rule's
+      reaction-centre ECFP. This is the intended morganrxn criterion.
+    - ``reaction``: a rule is applicable to S when S contains the (removed bits
+      of the) reaction ECFP itself. This coarser baseline quantifies what the
+      reaction-centre ECFP buys us — it typically applies to more (target, rule)
+      pairs but at a lower accuracy.
+
 Running the script with no arguments reproduces the full benchmark:
     python applicability_accuracy.py
 
@@ -22,6 +32,7 @@ is equivalent to:
     python applicability_accuracy.py \\
         --radii 0,1,2,3,4,5 \\
         --n-samples 1000 \\
+        --applicability-modes reaction_center,reaction \\
         --benchmark-dataset metanetx=metanetx \\
         --benchmark-dataset uspto=uspto
 
@@ -273,11 +284,13 @@ def export_debug_tables(
     ecfp_params: Dict[str, Any],
     failed_cases: List[Dict[str, Any]],
     error_cases: List[Dict[str, Any]],
+    applicability_mode: str = "reaction_center",
 ) -> None:
     debug_dir.mkdir(parents=True, exist_ok=True)
     prefix = str(
         debug_dir
-        / f"{benchmark_name}__{database_name}__r{ecfp_params['radius']}__fp{ecfp_params['fpSize']}"
+        / f"{benchmark_name}__{database_name}__{applicability_mode}"
+        f"__r{ecfp_params['radius']}__fp{ecfp_params['fpSize']}"
     )
 
     pd.DataFrame(failed_cases).to_csv(f"{prefix}__failed_cases.tsv", sep="\t", index=False)
@@ -328,19 +341,48 @@ def compute_ecfp_applies_accuracy(
     smi_targets: Iterable[str],
     ecfp_params: Dict[str, Any],
     min_smi_sub_atoms: int,
+    applicability_mode: str = "reaction_center",
     debug: bool = False,
     debug_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
+    """Compute the paired applicability/accuracy metrics for one configuration.
+
+    ``applicability_mode`` selects the fingerprint used to decide whether a rule
+    is applicable to a target (the child ECFP prediction is always the reaction
+    ECFP added to the target):
+
+    - ``"reaction_center"`` (default): a rule applies when the target contains the
+      reaction-centre ECFP of the rule. This is the intended morganrxn criterion.
+    - ``"reaction"``: a rule applies when the target contains the (negative bits
+      of the) reaction ECFP itself. This coarser criterion is provided as a
+      baseline to quantify what the reaction-centre ECFP buys us.
+    """
+    if applicability_mode not in ("reaction_center", "reaction"):
+        raise ValueError(
+            f"Invalid applicability_mode {applicability_mode!r}; "
+            "expected 'reaction_center' or 'reaction'."
+        )
+
     t0 = time.perf_counter()
 
     print("=" * 80)
-    print(f"Loading ReactionRules: {database_name} | ecfp_params: {ecfp_params}")
+    print(
+        f"Loading ReactionRules: {database_name} | ecfp_params: {ecfp_params} | "
+        f"applicability_mode: {applicability_mode}"
+    )
     reaction_rules = ReactionRules.load(database_name=database_name, ecfp_params=ecfp_params)
 
     reaction_rules.filter_by_smi_sub_atoms(min_atoms=min_smi_sub_atoms, verbose=True)
 
     ecfp_reaction_np = np.asarray(reaction_rules.ecfp_reaction, dtype=np.int32)
     ecfp_reaction_center_np = np.asarray(reaction_rules.ecfp_reaction_center, dtype=np.int32)
+
+    # The applicability filter uses either the reaction-centre ECFP (the intended
+    # criterion) or the reaction ECFP itself (baseline). Either way the predicted
+    # child ECFP is target + reaction ECFP, so only the mask differs.
+    applicability_ecfp_np = (
+        ecfp_reaction_center_np if applicability_mode == "reaction_center" else ecfp_reaction_np
+    )
 
     n_targets_total = n_targets_valid = n_targets_with_ecfp_apply = 0
     n_ecfp_applies = n_correct = 0
@@ -377,7 +419,7 @@ def compute_ecfp_applies_accuracy(
 
         try:
             smi_ecfp_childs, rxn_idxs_unique = one_step(
-                smi_ecfp, ecfp_reaction_np, ecfp_reaction_center_np
+                smi_ecfp, ecfp_reaction_np, applicability_ecfp_np
             )
         except Exception as exc:
             n_one_step_errors += 1
@@ -508,11 +550,13 @@ def compute_ecfp_applies_accuracy(
             ecfp_params=ecfp_params,
             failed_cases=failed_cases,
             error_cases=error_cases,
+            applicability_mode=applicability_mode,
         )
 
     return {
         "benchmark_name": benchmark_name,
         "database_name": database_name,
+        "applicability_mode": applicability_mode,
         "radius": ecfp_params["radius"],
         "fpSize": ecfp_params["fpSize"],
         "folded": ecfp_params["folded"],
@@ -553,8 +597,11 @@ def compute_ecfp_applies_accuracy(
 
 
 def make_matrix(results_df: pd.DataFrame, value_col: str) -> pd.DataFrame:
+    index_cols = ["benchmark_name", "database_name"]
+    if "applicability_mode" in results_df.columns:
+        index_cols.append("applicability_mode")
     matrix = results_df.pivot_table(
-        index=["benchmark_name", "database_name"],
+        index=index_cols,
         columns="radius",
         values=value_col,
         aggfunc="first",
@@ -610,6 +657,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--random-seed", type=int, default=DEFAULT_RANDOM_SEED)
     parser.add_argument("--limit-targets", type=int, default=None)
     parser.add_argument("--out-xlsx", type=Path, default=DEFAULT_OUT_XLSX)
+    parser.add_argument(
+        "--applicability-modes",
+        default="reaction_center,reaction",
+        help=(
+            "Comma-separated applicability criteria to evaluate. "
+            "'reaction_center' uses the reaction-centre ECFP (intended morganrxn "
+            "criterion); 'reaction' uses the reaction ECFP as a baseline to show "
+            "the value of the reaction centre. Default: both."
+        ),
+    )
     parser.add_argument("--debug", action="store_true")
     parser.add_argument(
         "--benchmark-dataset",
@@ -634,9 +691,18 @@ def main() -> None:
     benchmark_datasets = parse_dataset_specs(args.benchmark_dataset, DEFAULT_BENCHMARK_DATASETS)
     paired_rule_names = parse_dataset_specs(args.paired_rules, DEFAULT_PAIRED_RULES)
 
+    applicability_modes = [m.strip() for m in args.applicability_modes.split(",") if m.strip()]
+    invalid_modes = [m for m in applicability_modes if m not in ("reaction_center", "reaction")]
+    if not applicability_modes or invalid_modes:
+        raise ValueError(
+            f"Invalid --applicability-modes {args.applicability_modes!r}; "
+            "expected a comma-separated subset of 'reaction_center,reaction'."
+        )
+
     print("Paired one-step applicability/accuracy benchmark")
     print("=" * 80)
     print("radii:", radii)
+    print("applicability_modes:", applicability_modes)
     print("n_samples:", args.n_samples)
     print("fp_size:", args.fp_size)
     print("folded:", folded)
@@ -684,25 +750,30 @@ def main() -> None:
                 ecfp_params = make_ecfp_params(
                     radius=radius, fp_size=args.fp_size, folded=folded, custom=args.custom
                 )
-                with timer(f"Accuracy | {benchmark_name} | {database_name} | radius={radius}"):
-                    result = compute_ecfp_applies_accuracy(
-                        benchmark_name=benchmark_name,
-                        database_name=database_name,
-                        smi_targets=smi_targets,
-                        ecfp_params=ecfp_params,
-                        min_smi_sub_atoms=args.min_smi_sub_atoms,
-                        debug=args.debug,
-                        debug_dir=debug_dir if args.debug else None,
-                    )
-                results.append(result)
+                for applicability_mode in applicability_modes:
+                    with timer(
+                        f"Accuracy | {benchmark_name} | {database_name} | "
+                        f"radius={radius} | mode={applicability_mode}"
+                    ):
+                        result = compute_ecfp_applies_accuracy(
+                            benchmark_name=benchmark_name,
+                            database_name=database_name,
+                            smi_targets=smi_targets,
+                            ecfp_params=ecfp_params,
+                            min_smi_sub_atoms=args.min_smi_sub_atoms,
+                            applicability_mode=applicability_mode,
+                            debug=args.debug,
+                            debug_dir=debug_dir if args.debug else None,
+                        )
+                    results.append(result)
 
-                # Save incrementally so a partial run still produces output.
-                results_df = pd.DataFrame(results)
-                export_results_to_excel(
-                    results_df=results_df,
-                    benchmark_summary_df=benchmark_summary_df,
-                    out_xlsx=out_xlsx,
-                )
+                    # Save incrementally so a partial run still produces output.
+                    results_df = pd.DataFrame(results)
+                    export_results_to_excel(
+                        results_df=results_df,
+                        benchmark_summary_df=benchmark_summary_df,
+                        out_xlsx=out_xlsx,
+                    )
 
     print("=" * 80)
     print("All benchmarks done.")
