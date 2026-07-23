@@ -303,6 +303,7 @@ def plot_tsne(
     alpha: float = 0.5,
     dpi: int = 300,
     clip_quantile: float | None = 0.999,
+    formats: Iterable[str] = ("png",),
 ) -> None:
     """
     Plot and save a t-SNE scatter plot.
@@ -312,6 +313,11 @@ def plot_tsne(
         stray outliers do not compress the main cloud. Clipped points are
         still part of the embedding, they are simply outside the view.
         Set to None to show the full extent.
+
+    formats:
+        Output file formats to write, e.g. ("png",), ("pdf",) or ("png", "pdf").
+        The base name comes from `output_png`; the suffix is replaced per format.
+        PDF is vector-based, so its quality is independent of `dpi`.
     """
     plt.figure(figsize=(9, 9))
 
@@ -345,8 +351,10 @@ def plot_tsne(
     plt.legend(markerscale=5)
     plt.axis("off")
     plt.title(title)
-    plt.savefig(output_png, dpi=dpi, bbox_inches="tight")
-    print(f"Saved figure to: {output_png}")
+    for fmt in formats:
+        output_path = output_png.with_suffix(f".{fmt}")
+        plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
+        print(f"Saved figure to: {output_path}")
     plt.close()
 
 
@@ -376,6 +384,7 @@ def run_tsne_workflow(
     dpi: int,
     clip_quantile: float | None = 0.999,
     min_smi_sub_atoms: int = DEFAULT_MIN_SMI_SUB_ATOMS,
+    formats: Iterable[str] = ("png",),
 ) -> None:
     """Run the full t-SNE workflow for one vector type."""
     print("\n" + "=" * 80)
@@ -423,6 +432,7 @@ def run_tsne_workflow(
         alpha=alpha,
         dpi=dpi,
         clip_quantile=clip_quantile,
+        formats=formats,
     )
 
     if output_coords is not None:
@@ -527,6 +537,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--alpha", type=float, default=0.5)
     parser.add_argument("--dpi", type=int, default=300)
 
+    parser.add_argument(
+        "--format",
+        dest="formats",
+        nargs="+",
+        choices=["png", "pdf"],
+        default=["png"],
+        help=(
+            "Figure output format(s). Use 'pdf' for lossless vector figures "
+            "(quality independent of --dpi), or 'png pdf' to save both."
+        ),
+    )
+
     return parser.parse_args()
 
 
@@ -591,6 +613,7 @@ def main() -> None:
             dpi=args.dpi,
             clip_quantile=clip_quantile,
             min_smi_sub_atoms=args.min_smi_sub_atoms,
+            formats=args.formats,
         )
 
         # ---------------------------------------------------------------------
@@ -617,6 +640,7 @@ def main() -> None:
             dpi=args.dpi,
             clip_quantile=clip_quantile,
             min_smi_sub_atoms=args.min_smi_sub_atoms,
+            formats=args.formats,
         )
 
 
