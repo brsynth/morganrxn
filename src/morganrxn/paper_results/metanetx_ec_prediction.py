@@ -1261,7 +1261,7 @@ def build_parser():
         help="Deprecated single-value alias for --ec-levels (kept for "
         "backward compatibility). If set, it overrides --ec-levels.",
     )
-    parser.add_argument("--min-label-count", type=int, default=5)
+    parser.add_argument("--min-label-count", type=int, default=20)
     parser.add_argument(
         "--max-labels",
         type=int,
