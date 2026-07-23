@@ -28,9 +28,9 @@ Output
 ------
 One ReactionRules .npz file per radius, saved by ReactionRules.save(), e.g.
 
-    data/processed/reaction_rules/uspto/ecfp_r0_fp1024_folded_uncustom/rules.npz
-    data/processed/reaction_rules/uspto/ecfp_r1_fp1024_folded_uncustom/rules.npz
-    data/processed/reaction_rules/uspto/ecfp_r2_fp1024_folded_uncustom/rules.npz
+    data/reaction_rules/uspto/ecfp_r0_fp1024_folded_uncustom/rules.npz
+    data/reaction_rules/uspto/ecfp_r1_fp1024_folded_uncustom/rules.npz
+    data/reaction_rules/uspto/ecfp_r2_fp1024_folded_uncustom/rules.npz
 
 Examples
 --------
