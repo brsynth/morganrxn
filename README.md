@@ -110,64 +110,120 @@ available on Zenodo: <https://doi.org/10.5281/zenodo.21509287>.
 
 ## Pipeline
 
-Reaction rules are built in three stages, then analyzed. Scripts are runnable as modules
-(`python -m morganrxn.…`).
+Reaction rules are built in three stages, then analyzed. The exact commands below are the
+ones used to produce the paper results on a SLURM cluster (see [`slurms/`](slurms/)); each
+`slurms/run_*.slurm` wraps one of them with a conda environment and
+`PYTHONPATH=src`. The commands can be run directly once the package is installed.
 
-### Stage 1 — sanitize reactions
+### Stage 1 — sanitize reactions (default parameters)
 
-Canonicalizes reaction SMILES, drops agents, removes atom maps and stereochemistry.
+Canonicalizes reaction SMILES, drops agents, removes atom maps and stereochemistry. No
+dedicated SLURM script — run with defaults:
 
 ```bash
 # USPTO (L2R only)
-python -m morganrxn.data_processing.uspto
+python src/morganrxn/data_processing/uspto.py
 
 # MetaNetX (both directions, keeps EC annotations)
-python -m morganrxn.data_processing.metanetx
+python src/morganrxn/data_processing/metanetx.py
 ```
 
-### Stage 2 — atom mapping
+### Stage 2 — atom mapping (default parameters)
 
-Applies RXNMapper_v2 atom mapping; unmappable reactions are dropped.
+Applies RXNMapper_v2 atom mapping (batch size 32); unmappable reactions are dropped. No
+dedicated SLURM script — run with defaults:
 
 ```bash
-python -m morganrxn.data_processing.map_reactions --data uspto
-python -m morganrxn.data_processing.map_reactions --data metanetx
+python src/morganrxn/data_processing/map_reactions.py --data uspto
+python src/morganrxn/data_processing/map_reactions.py --data metanetx
 ```
 
 ### Stage 3 — build reaction rules
 
 Deduplicates to monosubstrate reactions and computes, for each radius `h ∈ {0..5}`, the
 ECFP-compatible template, reaction ECFP, and reaction-center ECFP.
+(`slurms/run_create_reactionrules_{uspto,metanetx}.slurm`)
 
 ```bash
-python -m morganrxn.data_processing.create_reactionrules --data uspto   --radii 0,1,2,3,4,5
-python -m morganrxn.data_processing.create_reactionrules --data metanetx --radii 0,1,2,3,4,5
+python src/morganrxn/data_processing/create_reactionrules.py --data uspto    --radii 0,1,2,3,4,5
+python src/morganrxn/data_processing/create_reactionrules.py --data metanetx --radii 0,1,2,3,4,5
 ```
 
 ## Reproducing the paper results
 
-Each script defaults to radii 0–5 and reads the generated `ReactionRules`.
+The commands below use the exact parameters of the SLURM scripts. On the cluster,
+`--n-jobs` is set to `$SLURM_CPUS_PER_TASK` (8 for t-SNE, 16 for EC prediction).
+
+**Table 1 — representation counts & MetaNetX/USPTO overlap** (`slurms/run_data_statistics.slurm`)
 
 ```bash
-# Table 1 — representation counts & MetaNetX/USPTO overlap
-python -m morganrxn.paper_results.data_statistics
-
-# Figure — t-SNE of reaction & reaction-center ECFPs
-python -m morganrxn.paper_results.t_sne --datasets metanetx uspto
-
-# Table 2 — reaction-center filter vs. graph-level applicability
-python -m morganrxn.paper_results.applicability_accuracy
-
-# Table 3 — USPTO reaction-class prediction (4 classifiers)
-python -m morganrxn.paper_results.uspto_prediction
-
-# Table 4 — MetaNetX EC-number prediction (extra-trees, EC levels 1–4)
-python -m morganrxn.paper_results.metanetx_ec_prediction
+python src/morganrxn/paper_results/data_statistics.py \
+    --radii 0,1,2,3,4,5 \
+    --metanetx-database-name metanetx \
+    --uspto-database-name uspto \
+    --output-dir results/data_statistics \
+    --output-name reaction_vector_overlap_by_radius.csv
 ```
 
-Pass `-h` / `--help` to any script for the full set of options (radii, fingerprint size,
-classifiers, output paths, etc.). SLURM launch scripts for a cluster are provided under
-`slurms/`.
+**Figure — t-SNE of reaction & reaction-center ECFPs** (`slurms/run_t_sne.slurm`)
+
+```bash
+python src/morganrxn/paper_results/t_sne.py \
+    --datasets metanetx uspto \
+    --radii 0 1 2 3 4 5 \
+    --encoding raw \
+    --metric cosine \
+    --n-jobs 8 \
+    --output-dir results/t_sne \
+    --format pdf \
+    --save-coords
+```
+
+**Table 2 — reaction-center filter vs. graph-level applicability** (`slurms/run_applicability_accuracy.slurm`)
+
+```bash
+python src/morganrxn/paper_results/applicability_accuracy.py \
+    --radii 0,1,2,3,4,5 \
+    --n-samples 1000 \
+    --benchmark-dataset metanetx=metanetx \
+    --benchmark-dataset uspto=uspto \
+    --paired-rules metanetx=metanetx \
+    --paired-rules uspto=uspto \
+    --out-xlsx results/one_step_accuracy/applicability_accuracy_morganrxn_formats.xlsx
+```
+
+**Table 3 — USPTO reaction-class prediction** (4 classifiers) (`slurms/run_uspto_prediction.slurm`)
+
+```bash
+python src/morganrxn/paper_results/uspto_prediction.py \
+    --database-name uspto \
+    --radii 0,1,2,3,4,5 \
+    --models logistic_regression,random_forest,gradient_boosting,mlp \
+    --output-dir results/uspto_prediction \
+    --summary-output results/uspto_prediction/metrics_all_radii.csv \
+    --save-meta
+```
+
+**Table 4 — MetaNetX EC-number prediction** (extra-trees, EC levels 1–4) (`slurms/run_metanetx_ec_prediction.slurm`)
+
+```bash
+python src/morganrxn/paper_results/metanetx_ec_prediction.py \
+    --ec-levels 1,2,3,4 \
+    --radii 0,1,2,3,4,5 \
+    --min-label-count 5 \
+    --max-labels 300 \
+    --models sgd,et \
+    --feature-sets reaction_ecfp,reaction_center_ecfp,both \
+    --sample-mode unique_rules \
+    --n-jobs 16 \
+    --output-dir results/metanetx_ec_prediction \
+    --summary-output results/metanetx_ec_prediction/metrics_all_ec_levels_all_radii.csv \
+    --save-meta
+```
+
+Pass `-h` / `--help` to any script for the full set of options. Ready-to-submit SLURM
+scripts for all of the above (plus per-dataset applicability variants) are in
+[`slurms/`](slurms/).
 
 ## Citation
 
