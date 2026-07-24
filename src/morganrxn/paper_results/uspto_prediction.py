@@ -30,23 +30,23 @@ Examples
 --------
 Run radii 0 to 5:
 
-    python prediction.py --radii 0,1,2,3,4,5
+    python uspto_prediction.py --radii 0,1,2,3,4,5
 
 Run radius 2 only:
 
-    python prediction.py --radius 2
+    python uspto_prediction.py --radius 2
 
 Run only LR/RF for radii 0 to 5:
 
-    python prediction.py --radii 0,1,2,3,4,5 --models logistic_regression,random_forest
+    python uspto_prediction.py --radii 0,1,2,3,4,5 --models logistic_regression,random_forest
 
 Test quickly:
 
-    python prediction.py --radii 0,1,2 --max-rules 5000 --models logistic_regression,random_forest
+    python uspto_prediction.py --radii 0,1,2 --max-rules 5000 --models logistic_regression,random_forest
 
 Spyder/IPython:
 
-    %runfile path/to/prediction.py --args "--radii 0,1,2,3,4,5 --models logistic_regression,random_forest"
+    %runfile path/to/uspto_prediction.py --args "--radii 0,1,2,3,4,5 --models logistic_regression,random_forest"
 """
 
 import argparse
