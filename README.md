@@ -2,14 +2,14 @@
 
 **Representing chemical and enzymatic reactions in fingerprint space for applicability filtering and classification.**
 
-`morganrxn` represents chemical reactions as signed transformations between counted
-molecular Extended-Connectivity Fingerprint (ECFP) vectors, and studies the link
+The `morganrxn` package represents chemical reactions as signed transformations between
+counted molecular Extended-Connectivity Fingerprint (ECFP) vectors, and studies the link
 between graph-level reaction templates and vector-space reaction operators.
 
 For an ECFP-compatible reaction template, graph-level reaction application induces a
 *constant* displacement in counted ECFP space, so graph transformations become affine
 translations and their composition becomes vector addition. Reaction-center ECFPs encode
-the local environments a reaction requires and provide a fast, coordinate-wise ($O(d)$)
+the local environments a reaction requires and provide a fast, coordinate-wise (O(d))
 necessary condition for applicability, used as a prefilter before graph-level validation.
 
 This repository accompanies the manuscript *"Representing Chemical and Enzymatic Reactions
@@ -105,20 +105,17 @@ data/
     └── metanetx/ecfp_r{0..5}_fp1024_folded_uncustom/rules.npz
 ```
 
-The `data/`, `results/`, and `slurms/` directories are git-ignored. Datasets are
+The `data/` and `results/` directories are git-ignored. Datasets are
 available on Zenodo: <https://doi.org/10.5281/zenodo.21509287>.
 
 ## Pipeline
 
-Reaction rules are built in three stages, then analyzed. The exact commands below are the
-ones used to produce the paper results on a SLURM cluster (see [`slurms/`](slurms/)); each
-`slurms/run_*.slurm` wraps one of them with a conda environment and
-`PYTHONPATH=src`. The commands can be run directly once the package is installed.
+Reaction rules are built in three stages, then analyzed. The commands below are the ones
+used to produce the paper results, runnable directly once the package is installed.
 
 ### Stage 1 — sanitize reactions (default parameters)
 
-Canonicalizes reaction SMILES, drops agents, removes atom maps and stereochemistry. No
-dedicated SLURM script — run with defaults:
+Canonicalizes reaction SMILES, drops agents, removes atom maps and stereochemistry:
 
 ```bash
 # USPTO (L2R only)
@@ -130,8 +127,7 @@ python src/morganrxn/data_processing/metanetx.py
 
 ### Stage 2 — atom mapping (default parameters)
 
-Applies RXNMapper_v2 atom mapping (batch size 32); unmappable reactions are dropped. No
-dedicated SLURM script — run with defaults:
+Applies RXNMapper_v2 atom mapping (batch size 32); unmappable reactions are dropped:
 
 ```bash
 python src/morganrxn/data_processing/map_reactions.py --data uspto
@@ -142,7 +138,6 @@ python src/morganrxn/data_processing/map_reactions.py --data metanetx
 
 Deduplicates to monosubstrate reactions and computes, for each radius `h ∈ {0..5}`, the
 ECFP-compatible template, reaction ECFP, and reaction-center ECFP.
-(`slurms/run_create_reactionrules_{uspto,metanetx}.slurm`)
 
 ```bash
 python src/morganrxn/data_processing/create_reactionrules.py --data uspto    --radii 0,1,2,3,4,5
@@ -151,10 +146,10 @@ python src/morganrxn/data_processing/create_reactionrules.py --data metanetx --r
 
 ## Reproducing the paper results
 
-The commands below use the exact parameters of the SLURM scripts. On the cluster,
-`--n-jobs` is set to `$SLURM_CPUS_PER_TASK` (8 for t-SNE, 16 for EC prediction).
+The commands below use the exact parameters that produced the paper results. Adjust
+`--n-jobs` to the number of cores available (8 for t-SNE, 16 for EC prediction were used).
 
-**Table 1 — representation counts & MetaNetX/USPTO overlap** (`slurms/run_data_statistics.slurm`)
+**Table 1 — representation counts & MetaNetX/USPTO overlap**
 
 ```bash
 python src/morganrxn/paper_results/data_statistics.py \
@@ -165,7 +160,7 @@ python src/morganrxn/paper_results/data_statistics.py \
     --output-name reaction_vector_overlap_by_radius.csv
 ```
 
-**Figure — t-SNE of reaction & reaction-center ECFPs** (`slurms/run_t_sne.slurm`)
+**Figure — t-SNE of reaction & reaction-center ECFPs**
 
 ```bash
 python src/morganrxn/paper_results/t_sne.py \
@@ -179,7 +174,7 @@ python src/morganrxn/paper_results/t_sne.py \
     --save-coords
 ```
 
-**Table 2 — reaction-center filter vs. graph-level applicability** (`slurms/run_applicability_accuracy.slurm`)
+**Table 2 — reaction-center filter vs. graph-level applicability**
 
 ```bash
 python src/morganrxn/paper_results/applicability_accuracy.py \
@@ -192,7 +187,7 @@ python src/morganrxn/paper_results/applicability_accuracy.py \
     --out-xlsx results/one_step_accuracy/applicability_accuracy_morganrxn_formats.xlsx
 ```
 
-**Table 3 — USPTO reaction-class prediction** (4 classifiers) (`slurms/run_uspto_prediction.slurm`)
+**Table 3 — USPTO reaction-class prediction** (4 classifiers)
 
 ```bash
 python src/morganrxn/paper_results/uspto_prediction.py \
@@ -204,7 +199,7 @@ python src/morganrxn/paper_results/uspto_prediction.py \
     --save-meta
 ```
 
-**Table 4 — MetaNetX EC-number prediction** (extra-trees, EC levels 1–4) (`slurms/run_metanetx_ec_prediction.slurm`)
+**Table 4 — MetaNetX EC-number prediction** (extra-trees, EC levels 1–4)
 
 ```bash
 python src/morganrxn/paper_results/metanetx_ec_prediction.py \
@@ -221,9 +216,7 @@ python src/morganrxn/paper_results/metanetx_ec_prediction.py \
     --save-meta
 ```
 
-Pass `-h` / `--help` to any script for the full set of options. Ready-to-submit SLURM
-scripts for all of the above (plus per-dataset applicability variants) are in
-[`slurms/`](slurms/).
+Pass `-h` / `--help` to any script for the full set of options.
 
 ## Citation
 
