@@ -36,19 +36,19 @@ Examples
 --------
 USPTO radii 0 to 5:
 
-    python create_reactionrules_from_mapped_rules.py --data uspto --radii 0,1,2,3,4,5
+    python create_reactionrules.py --data uspto --radii 0,1,2,3,4,5
 
 MetaNetX radii 0 to 5:
 
-    python create_reactionrules_from_mapped_rules.py --data metanetx --radii 0,1,2,3,4,5
+    python create_reactionrules.py --data metanetx --radii 0,1,2,3,4,5
 
 Test on first 1000 rows:
 
-    python create_reactionrules_from_mapped_rules.py --data uspto --radii 0,1,2 --max-rows 1000
+    python create_reactionrules.py --data uspto --radii 0,1,2 --max-rows 1000
 
 Single radius still works:
 
-    python create_reactionrules_from_mapped_rules.py --data uspto --radius 2
+    python create_reactionrules.py --data uspto --radius 2
 """
 
 import argparse
@@ -589,7 +589,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--data",
         choices=["metanetx", "uspto"],
         default="metanetx",
-        help="Dataset to process. Default: uspto.",
+        help="Dataset to process. Default: metanetx.",
     )
 
     parser.add_argument(
