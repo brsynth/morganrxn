@@ -208,18 +208,18 @@ def make_custom_bond_invariants(
 
 
 atom_invariant_params = {
-    "use_atomic_num":    True,   # C, N, O, P, S...
-    "use_degree":        True,   # nombre de voisins lourds (connectivité locale)
-    "use_formal_charge": True,  # trop spécifique, rarement utile en biosynthèse
-    "use_num_h":         False,  # redondant avec degree + valence
-    "use_valence":       False,  # trop spécifique
-    "use_aromatic":      True,   # aromatique vs aliphatique : info structurale clé
-    "use_ring":          False,  # cycle : info utile mais ajoute de la spécificité
+    "use_atomic_num":    True,   # element: C, N, O, P, S, ...
+    "use_degree":        True,   # number of heavy neighbours (local connectivity)
+    "use_formal_charge": True,   # charge state
+    "use_num_h":         False,  # redundant with degree + valence
+    "use_valence":       False,  # redundant with degree + H count
+    "use_aromatic":      True,   # aromatic vs aliphatic: key structural cue
+    "use_ring":          False,  # ring membership: informative but adds specificity
 }
 bond_invariant_params = {
-    "use_bond_type":   True,    # simple/double/triple/aromatique
+    "use_bond_type":   True,    # single/double/triple/aromatic
     "use_conjugation": False,
-    "use_aromatic":    False,   # déjà capturé par bond_type (aromatic bond)
+    "use_aromatic":    False,   # already captured by bond_type (aromatic bond)
     "use_ring":        False,
     "use_stereo":      False,
 }
