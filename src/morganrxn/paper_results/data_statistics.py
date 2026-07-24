@@ -23,17 +23,17 @@ Examples
 --------
 Default run, radii 0 to 5:
 
-    python compute_reaction_vector_overlap.py
+    python data_statistics.py
 
 Specify database names:
 
-    python compute_reaction_vector_overlap.py \
+    python data_statistics.py \
         --metanetx-database-name metanetx \
         --uspto-database-name uspto
 
 Radius 2 only:
 
-    python compute_reaction_vector_overlap.py --radii 2
+    python data_statistics.py --radii 2
 """
 
 import argparse
