@@ -12,10 +12,6 @@ translations and their composition becomes vector addition. Reaction-center ECFP
 the local environments a reaction requires and provide a fast, coordinate-wise (O(d))
 necessary condition for applicability, used as a prefilter before graph-level validation.
 
-This repository accompanies the manuscript *"Representing Chemical and Enzymatic Reactions
-in Fingerprint Space for Applicability Filtering and Classification"* (Meyer, Duigou,
-Gricourt, Faulon).
-
 ## Key concepts
 
 For a reaction `r : S₁ + … + Sₘ → P₁ + … + Pₙ` at ECFP radius `h`:
