@@ -15,7 +15,7 @@ and writes a TSV with two columns:
 
 The mapping is applied afterwards by `map_reactions.py` (stage 2), and the
 deduplication / open-matter-loss filtering happens in
-`create_reactionrules_from_mapped_rules.py` (stage 3).
+`create_reactionrules.py` (stage 3).
 
 Usage:
 
