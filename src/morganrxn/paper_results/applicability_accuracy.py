@@ -43,6 +43,7 @@ This is meant for a cluster job. For a quick local sanity check:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import random
 import time
 from pathlib import Path
@@ -85,6 +86,7 @@ DEFAULT_PAIRED_RULES = {
 }
 
 DEBUG_MAX_PRODUCTS_PER_ROW = 25
+SLOW_TARGET_SECONDS = 120
 
 
 # ======================================================================================
@@ -134,8 +136,9 @@ def mol_from_smiles(smi: str):
         return None
 
 
-def ecfp_to_key(ecfp) -> Tuple[int, ...]:
-    return tuple(np.asarray(ecfp, dtype=np.int32).tolist())
+def ecfp_to_key(ecfp) -> bytes:
+    # 16-byte digest instead of a d-element tuple: same uniqueness count, ~1000x less memory.
+    return hashlib.blake2b(np.asarray(ecfp, dtype=np.int32).tobytes(), digest_size=16).digest()
 
 
 def safe_list_get(values: Any, idx: int, default: Any = "") -> Any:
@@ -184,7 +187,7 @@ def filter_smiles_dataframe(
     rows = []
     n_total = n_invalid = n_too_small = n_too_heavy = 0
 
-    for smi in smiles:
+    for smi in sorted(smiles):
         n_total += 1
         mol = mol_from_smiles(smi)
         if mol is None:
@@ -389,13 +392,26 @@ def compute_ecfp_applies_accuracy(
     n_invalid_targets = n_target_ecfp_errors = n_one_step_errors = 0
     n_apply_errors = n_product_ecfp_errors = 0
 
+    # Failure-source breakdown among (target, applicable-rule) pairs that are not
+    # correct: does the reaction-centre ECFP filter accept a rule that does not
+    # actually apply at the graph level ("graph_level_false_positive"), or does the
+    # template apply and produce valid products, but the linear ECFP prediction
+    # (target + reaction ECFP) does not match any of them ("fingerprint_translation
+    # _mismatch")? A residual bucket captures the rare case where valid products
+    # exist but none of their ECFPs could be computed.
+    n_fail_graph_level_false_positive = 0
+    n_fail_fingerprint_translation_mismatch = 0
+    n_fail_product_ecfp_computation_error = 0
+
     unique_template_smiles: Set[str] = set()
-    unique_predicted_ecfps: Set[Tuple[int, ...]] = set()
+    unique_predicted_ecfps: Set[bytes] = set()
     failed_cases: List[Dict[str, Any]] = []
     error_cases: List[Dict[str, Any]] = []
 
     for target_idx, smi_sub_raw in enumerate(smi_targets):
         n_targets_total += 1
+        t_target = time.perf_counter()
+        n_cases_before = n_ecfp_applies
 
         smi_sub = smi_sub_raw
 
@@ -491,7 +507,7 @@ def compute_ecfp_applies_accuracy(
 
             if local_accuracy:
                 n_correct += 1
-            elif debug:
+            else:
                 if apply_error:
                     failure_reason = "apply_reaction_error"
                 elif len(smi_prods) == 0:
@@ -503,6 +519,16 @@ def compute_ecfp_applies_accuracy(
                 else:
                     failure_reason = "predicted_ecfp_not_found_in_products"
 
+                if failure_reason in (
+                    "apply_reaction_error", "no_raw_products", "no_sanitized_products",
+                ):
+                    n_fail_graph_level_false_positive += 1
+                elif failure_reason == "all_product_ecfp_errors":
+                    n_fail_product_ecfp_computation_error += 1
+                else:
+                    n_fail_fingerprint_translation_mismatch += 1
+
+            if not local_accuracy and debug:
                 failed_cases.append({
                     "benchmark_name": benchmark_name, "database_name": database_name,
                     "radius": ecfp_params["radius"], "fpSize": ecfp_params["fpSize"],
@@ -519,6 +545,14 @@ def compute_ecfp_applies_accuracy(
                     "products_truncated": len(smi_prods_sanitized) > DEBUG_MAX_PRODUCTS_PER_ROW,
                     "apply_error": apply_error, "failure_reason": failure_reason,
                 })
+
+        dt_target = time.perf_counter() - t_target
+        if dt_target > SLOW_TARGET_SECONDS:
+            print(
+                f"[slow target] idx={target_idx} time={dt_target:.0f}s "
+                f"cases={n_ecfp_applies - n_cases_before} smiles={smi_sub}",
+                flush=True,
+            )
 
         if (target_idx + 1) % 100 == 0:
             current_accuracy = n_correct / n_ecfp_applies if n_ecfp_applies else float("nan")
@@ -576,6 +610,15 @@ def compute_ecfp_applies_accuracy(
         "n_total_cases": n_total_cases,
         "n_succeeded": n_correct,
         "n_failed": n_failed,
+        "n_fail_graph_level_false_positive": n_fail_graph_level_false_positive,
+        "n_fail_fingerprint_translation_mismatch": n_fail_fingerprint_translation_mismatch,
+        "n_fail_product_ecfp_computation_error": n_fail_product_ecfp_computation_error,
+        "graph_level_false_positive_rate": (
+            n_fail_graph_level_false_positive / n_failed if n_failed > 0 else float("nan")
+        ),
+        "fingerprint_translation_mismatch_rate": (
+            n_fail_fingerprint_translation_mismatch / n_failed if n_failed > 0 else float("nan")
+        ),
         "n_ecfp_applies": n_ecfp_applies,
         "n_unique_template_smiles": len(unique_template_smiles),
         "n_unique_predicted_ecfps": len(unique_predicted_ecfps),
@@ -619,7 +662,11 @@ def export_results_to_excel(
 
     metric_columns = [
         "accuracy", "failure_rate", "target_coverage",
-        "n_total_cases", "n_succeeded", "n_failed", "n_ecfp_applies",
+        "n_total_cases", "n_succeeded", "n_failed",
+        "n_fail_graph_level_false_positive", "n_fail_fingerprint_translation_mismatch",
+        "n_fail_product_ecfp_computation_error",
+        "graph_level_false_positive_rate", "fingerprint_translation_mismatch_rate",
+        "n_ecfp_applies",
         "n_unique_template_smiles", "n_unique_predicted_ecfps",
         "diversity_ratio_templates", "diversity_ratio_predicted_ecfps",
         "n_targets_total", "n_targets_valid", "n_targets_with_ecfp_apply",
@@ -656,6 +703,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-mol-wt", type=float, default=DEFAULT_MAX_MOL_WT)
     parser.add_argument("--random-seed", type=int, default=DEFAULT_RANDOM_SEED)
     parser.add_argument("--limit-targets", type=int, default=None)
+    parser.add_argument(
+        "--target-start", type=int, default=0,
+        help="First target index of the (deterministic) sample to process. With "
+             "--target-end, splits a run into independent chunks whose counters "
+             "are summed by merge_applicability_chunks.py.",
+    )
+    parser.add_argument("--target-end", type=int, default=None,
+                        help="End (exclusive) target index of the chunk.")
     parser.add_argument("--out-xlsx", type=Path, default=DEFAULT_OUT_XLSX)
     parser.add_argument(
         "--applicability-modes",
@@ -740,6 +795,7 @@ def main() -> None:
             continue
 
         smi_targets = targets[: args.limit_targets] if args.limit_targets is not None else targets
+        smi_targets = smi_targets[args.target_start : args.target_end]
         print("=" * 80)
         print(f"Benchmark: {benchmark_name}")
         print(f"Paired ReactionRules database(s): {', '.join(rule_names)}")
