@@ -33,6 +33,9 @@ def summarize(g: pd.DataFrame) -> pd.Series:
         "n_cases": int(g["n_cases"].sum()),
         "missed_applied_by_prefilter": int(g["missed_applied_by_prefilter"].sum()),
         "missed_subgraph_by_prefilter": int(g["missed_subgraph_by_prefilter"].sum()),
+        # graph times of censored targets are lower bounds, so graph totals and
+        # graph-vs-vector speedups are lower bounds when n_graph_censored > 0
+        "n_graph_censored": int(g["graph_censored"].sum()),
     }
     for col in ROUTES:
         s = g[col]
@@ -56,6 +59,11 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--inputs", nargs="+", required=True)
     p.add_argument("--out-csv", type=Path, required=True)
+    p.add_argument("--graph-budget-s", type=float, default=1800.0,
+                   help="Same per-target cap as the runs; applied to every row so that "
+                        "rows computed without a cap follow the same censoring rule.")
+    p.add_argument("--exclude-targets", default="",
+                   help="Comma-separated target indices dropped from every group.")
     args = p.parse_args()
 
     df = pd.concat([pd.read_csv(f) for f in args.inputs], ignore_index=True)
@@ -63,6 +71,15 @@ def main() -> None:
     if n_dup:
         print(f"WARNING: {n_dup} duplicated (radius, target) rows; keeping the first.")
         df = df.drop_duplicates(["database", "fpSize", "radius", "target_idx"])
+
+    excluded = {int(x) for x in args.exclude_targets.split(",") if x.strip()}
+    df = df[~df["target_idx"].isin(excluded)].copy()
+    if "graph_censored" not in df:
+        df["graph_censored"] = False
+    df["graph_censored"] = df["graph_censored"].fillna(False).astype(bool) | (
+        df["t_graph_s"] >= args.graph_budget_s
+    )
+    df["t_graph_s"] = df["t_graph_s"].clip(upper=args.graph_budget_s)
 
     summary = df.groupby(["database", "fpSize", "radius"]).apply(summarize).reset_index()
     args.out_csv.parent.mkdir(parents=True, exist_ok=True)

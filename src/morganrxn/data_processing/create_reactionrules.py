@@ -420,7 +420,7 @@ def process_one_radius(
     debug_output = (
         Path(args.debug_output)
         if args.debug_output is not None and len(args.radii_list) == 1
-        else input_path.with_name(f"{input_path.stem}_ecfp_r{radius}_debug.tsv")
+        else input_path.with_name(f"{input_path.stem}_ecfp_r{radius}_fp{args.fp_size}_debug.tsv")
     )
 
     ecfp_params = make_ecfp_params(
@@ -714,7 +714,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Optional summary JSON path. "
-            "Default: next to input file, named <stem>_multi_radius_summary.json."
+            "Default: next to input file, named <stem>_fp<fp-size>_multi_radius_summary.json."
         ),
     )
 
@@ -745,7 +745,7 @@ def main():
     summary_output = (
         Path(args.summary_output)
         if args.summary_output is not None
-        else input_path.with_name(f"{input_path.stem}_multi_radius_summary.json")
+        else input_path.with_name(f"{input_path.stem}_fp{args.fp_size}_multi_radius_summary.json")
     )
 
     print("Creating ReactionRules for multiple radii")

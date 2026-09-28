@@ -703,14 +703,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-mol-wt", type=float, default=DEFAULT_MAX_MOL_WT)
     parser.add_argument("--random-seed", type=int, default=DEFAULT_RANDOM_SEED)
     parser.add_argument("--limit-targets", type=int, default=None)
-    parser.add_argument(
-        "--target-start", type=int, default=0,
-        help="First target index of the (deterministic) sample to process. With "
-             "--target-end, splits a run into independent chunks whose counters "
-             "are summed by merge_applicability_chunks.py.",
-    )
-    parser.add_argument("--target-end", type=int, default=None,
-                        help="End (exclusive) target index of the chunk.")
     parser.add_argument("--out-xlsx", type=Path, default=DEFAULT_OUT_XLSX)
     parser.add_argument(
         "--applicability-modes",
@@ -795,7 +787,6 @@ def main() -> None:
             continue
 
         smi_targets = targets[: args.limit_targets] if args.limit_targets is not None else targets
-        smi_targets = smi_targets[args.target_start : args.target_end]
         print("=" * 80)
         print(f"Benchmark: {benchmark_name}")
         print(f"Paired ReactionRules database(s): {', '.join(rule_names)}")

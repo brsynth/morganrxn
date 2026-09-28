@@ -91,7 +91,7 @@ def product_keys(rxn, smi, ecfp_params):
     return keys
 
 
-def time_target(smi, ecfp_params, centers, reactions, rxns, patterns, valid):
+def time_target(smi, ecfp_params, centers, reactions, rxns, patterns, valid, graph_budget_s):
     n_rules = len(rxns)
     mol = Chem.MolFromSmiles(smi)
 
@@ -125,8 +125,17 @@ def time_target(smi, ecfp_params, centers, reactions, rxns, patterns, valid):
     t_app = np.zeros(n_rules)
     applied = np.zeros(n_rules, dtype=bool)
     keys_unique = {}
+    # Templates are applied in rule order; past graph_budget_s the graph route is
+    # stopped (censored: t_graph is then a lower bound) and the candidates not yet
+    # reached are applied on their own, so the vector+graph route stays complete.
+    censored = False
+    n_reached = n_rules
     t0 = time.perf_counter()
     for i in range(n_rules):
+        if time.perf_counter() - t0 > graph_budget_s:
+            censored = True
+            n_reached = i
+            break
         if rxns[i] is None:
             continue
         t = time.perf_counter()
@@ -137,6 +146,14 @@ def time_target(smi, ecfp_params, centers, reactions, rxns, patterns, valid):
         if i in unique_set:
             keys_unique[i] = keys or set()
     t_graph = time.perf_counter() - t0
+
+    for i in sorted(unique_set):
+        if i < n_reached or rxns[i] is None:
+            continue
+        t = time.perf_counter()
+        keys = product_keys(rxns[i], smi, ecfp_params)
+        t_app[i] = time.perf_counter() - t
+        keys_unique[i] = keys or set()
 
     # Table 2 counters on the de-duplicated candidates
     n_correct = sum(
@@ -152,6 +169,8 @@ def time_target(smi, ecfp_params, centers, reactions, rxns, patterns, valid):
         "n_candidates_unique": len(rxn_unique),
         "n_subgraph_hits": int(sub_hit.sum()),
         "n_rules_applied": int(applied.sum()),
+        "graph_censored": censored,
+        "n_templates_reached": int(n_reached),
         "missed_subgraph_by_prefilter": int(np.sum(sub_hit & ~mask)),
         "missed_applied_by_prefilter": int(np.sum(applied & ~mask)),
         "n_cases": len(rxn_unique),
@@ -183,6 +202,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--min-smi-sub-atoms", type=int, default=5)
     p.add_argument("--max-mol-wt", type=float, default=1000.0)
     p.add_argument("--random-seed", type=int, default=42)
+    p.add_argument("--graph-budget-s", type=float, default=1800.0,
+                   help="Per-target budget of the graph route; beyond it the target is "
+                        "censored (graph time = lower bound).")
+    p.add_argument("--exclude-targets", default="",
+                   help="Comma-separated target indices to skip (e.g. 99,912).")
     p.add_argument("--out-csv", type=Path, default=None)
     return p
 
@@ -202,11 +226,15 @@ def main() -> None:
     )
     targets = benchmark_smiles[args.database_name]
     end = args.target_end if args.target_end is not None else len(targets)
-    chunk = list(enumerate(targets))[args.target_start:end]
+    excluded = {int(x) for x in args.exclude_targets.split(",") if x.strip()}
+    chunk = [(i, t) for i, t in list(enumerate(targets))[args.target_start:end] if i not in excluded]
     print(f"Targets {args.target_start}..{end - 1} ({len(chunk)})", flush=True)
 
+    out_dir = DEFAULT_OUT_DIR if args.max_mol_wt == 1000 else (
+        DEFAULT_OUT_DIR.parent / f"{DEFAULT_OUT_DIR.name}_mw{args.max_mol_wt:g}"
+    )
     out_csv = args.out_csv or (
-        DEFAULT_OUT_DIR
+        out_dir
         / f"{args.database_name}_fp{args.fp_size}_r{''.join(map(str, radii))}"
           f"_t{args.target_start:04d}-{end:04d}.csv"
     )
@@ -227,7 +255,7 @@ def main() -> None:
         print(f"[radius {radius}] {len(rxns)} rules, compiled in {t_compile:.0f}s", flush=True)
 
         for target_idx, smi in chunk:
-            row = time_target(smi, ecfp_params, centers, reactions, rxns, patterns, valid)
+            row = time_target(smi, ecfp_params, centers, reactions, rxns, patterns, valid, args.graph_budget_s)
             row.update({
                 "database": args.database_name, "fpSize": args.fp_size, "radius": radius,
                 "target_idx": target_idx, "t_compile_rules_s": t_compile,
@@ -238,7 +266,8 @@ def main() -> None:
                 f"vector={row['t_vector_s'] * 1e3:.0f}ms "
                 f"vector+graph={row['t_vector_then_graph_s']:.1f}s "
                 f"cands={row['n_candidates_unique']} "
-                f"missed={row['missed_applied_by_prefilter']}",
+                f"missed={row['missed_applied_by_prefilter']}"
+                f"{' CENSORED' if row['graph_censored'] else ''}",
                 flush=True,
             )
             pd.DataFrame(rows).to_csv(out_csv, index=False)

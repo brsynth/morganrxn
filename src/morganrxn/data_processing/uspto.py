@@ -185,7 +185,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-i",
         "--input",
-        default=USPTO_DIR / "datasetB.csv",
+        default=USPTO_DIR / "dataSetB.csv",
         help="Input CSV file.",
     )
 

@@ -10,7 +10,7 @@ from morganrxn.core.centre import complete_reaction_mapping
 # Defaults.
 # =================================================================================================
 
-DEFAULT_MODEL_NAME = "original"  # original RXNMapper model (head 5, layer 10)
+DEFAULT_MODEL_NAME = "default"  # RXNMapper_v2 alberta_uspto_2800k (layer 10, head 3)
 DEFAULT_BATCH_SIZE = 32
 
 
@@ -26,11 +26,9 @@ def _get_batched_mapper(model_name: str, batch_size: int) -> "BatchedMapper":
     # installed -- rule creation imports those but never maps reactions here.
     from rxnmapper import BatchedMapper
 
-    # rxnmapper's BatchedMapper does not take a model name: its defaults
-    # (head=5, layer=10, model_type="albert") are exactly the "original" model
-    # referenced by DEFAULT_MODEL_NAME. model_name is kept in the public API for
-    # forward compatibility but is not forwarded here.
-    return BatchedMapper(batch_size=batch_size)
+    # Passed explicitly: a BatchedMapper without model_name (the pre-v2 rxnmapper
+    # API) would raise here instead of silently using another model.
+    return BatchedMapper(batch_size=batch_size, model_name=model_name)
 
 
 # =================================================================================================
