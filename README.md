@@ -74,13 +74,16 @@ src/morganrxn/
     ├── data_statistics.py    #   representation counts & cross-dataset overlap
     ├── t_sne.py              #   t-SNE projection of reaction vectors
     ├── applicability_accuracy.py  # reaction-center filter vs. graph-level application
+    ├── graph_vs_vector_timing.py  # per-target runtime, graph-level vs. vector route
+    ├── merge_graph_vs_vector.py   # aggregate the runtime CSVs
     ├── uspto_prediction.py   #   USPTO reaction-class prediction
     └── metanetx_ec_prediction.py  # MetaNetX EC-number prediction
 
+cluster/                      # SLURM: submit_all.sh chains the full pipeline
 data/                         # Datasets (git-ignored)
 ├── uspto/                    #   raw + processed USPTO
 ├── metanetx/                 #   raw + processed MetaNetX
-└── reaction_rules/           #   generated ReactionRules, per database & radius
+└── reaction_rules/           #   generated ReactionRules, per database, radius & fp size
 ```
 
 ## Data layout
@@ -91,14 +94,14 @@ Raw inputs are placed under `data/`, and generated reaction rules are written to
 ```
 data/
 ├── uspto/
-│   ├── datasetB.csv                     # raw USPTO-50k
+│   ├── dataSetB.csv                     # raw USPTO-50k
 │   └── processed/                       # stage 1 & 2 outputs
 ├── metanetx/
 │   ├── chem_prop.tsv, reac_prop.tsv     # raw MetaNetX v4.5 tables
 │   └── processed/                       # stage 1 & 2 outputs
 └── reaction_rules/
-    ├── uspto/ecfp_r{0..5}_fp1024_folded_uncustom/rules.npz
-    └── metanetx/ecfp_r{0..5}_fp1024_folded_uncustom/rules.npz
+    ├── uspto/ecfp_r{0..5}_fp{512,1024,2048}_folded_uncustom/rules.npz
+    └── metanetx/ecfp_r{0..5}_fp{512,1024,2048}_folded_uncustom/rules.npz
 ```
 
 The `data/` and `results/` directories are git-ignored. Datasets are
@@ -123,7 +126,8 @@ python src/morganrxn/data_processing/metanetx.py
 
 ### Stage 2 — atom mapping (default parameters)
 
-Applies RXNMapper_v2 atom mapping (batch size 32); unmappable reactions are dropped:
+Applies RXNMapper_v2 atom mapping with its default model (`alberta_uspto_2800k`, layer 10,
+head 3; batch size 32); unmappable reactions are dropped:
 
 ```bash
 python src/morganrxn/data_processing/map_reactions.py --data uspto
@@ -140,10 +144,21 @@ python src/morganrxn/data_processing/create_reactionrules.py --data uspto    --r
 python src/morganrxn/data_processing/create_reactionrules.py --data metanetx --radii 0,1,2,3,4,5
 ```
 
+The fingerprint-size ablation uses the same command with `--fp-size 512` or `--fp-size 2048`
+(default 1024); rules are stored per size.
+
 ## Reproducing the paper results
 
-The commands below use the exact parameters that produced the paper results. Adjust
-`--n-jobs` to the number of cores available (8 for t-SNE, 16 for EC prediction were used).
+On a SLURM cluster, `cluster/submit_all.sh` runs the whole pipeline (stages 1–3, then every
+table, figure and ablation below, for fingerprint sizes 512, 1024 and 2048) as jobs chained
+by dependencies. Run it from the root of a clean clone containing the raw inputs:
+
+```bash
+bash cluster/submit_all.sh
+```
+
+The commands below are the per-step equivalents, for `--fp-size 1024` (add `--fp-size 512`
+or `--fp-size 2048` for the ablation). Adjust `--n-jobs` to the available cores.
 
 **Table 1 — representation counts & MetaNetX/USPTO overlap**
 
@@ -152,7 +167,7 @@ python src/morganrxn/paper_results/data_statistics.py \
     --radii 0,1,2,3,4,5 \
     --metanetx-database-name metanetx \
     --uspto-database-name uspto \
-    --output-dir results/data_statistics \
+    --output-dir results/data_statistics/fp1024 \
     --output-name reaction_vector_overlap_by_radius.csv
 ```
 
@@ -170,17 +185,32 @@ python src/morganrxn/paper_results/t_sne.py \
     --save-coords
 ```
 
-**Table 2 — reaction-center filter vs. graph-level applicability**
+**Table 2 — reaction-center filter vs. graph-level applicability** (1000 target molecules
+of at most 500 Da per database, deterministic sample; run once per database)
 
 ```bash
 python src/morganrxn/paper_results/applicability_accuracy.py \
     --radii 0,1,2,3,4,5 \
     --n-samples 1000 \
+    --max-mol-wt 500 \
+    --applicability-modes reaction_center \
     --benchmark-dataset metanetx=metanetx \
-    --benchmark-dataset uspto=uspto \
     --paired-rules metanetx=metanetx \
-    --paired-rules uspto=uspto \
-    --out-xlsx results/one_step_accuracy/applicability_accuracy_morganrxn_formats.xlsx
+    --out-xlsx results/table2_mw500/fp1024/applicability_metanetx.xlsx
+```
+
+**Runtime — graph-level vs. vector route** on the Table 2 targets (per-target CSV rows,
+aggregated with `merge_graph_vs_vector.py`)
+
+```bash
+python src/morganrxn/paper_results/graph_vs_vector_timing.py \
+    --database-name metanetx \
+    --radii 0,1,2,3,4,5 \
+    --n-samples 1000 \
+    --max-mol-wt 500
+python src/morganrxn/paper_results/merge_graph_vs_vector.py \
+    --inputs results/graph_vs_vector_mw500/*.csv \
+    --out-csv results/graph_vs_vector_mw500/summary.csv
 ```
 
 **Table 3 — USPTO reaction-class prediction** (4 classifiers)
@@ -190,8 +220,8 @@ python src/morganrxn/paper_results/uspto_prediction.py \
     --database-name uspto \
     --radii 0,1,2,3,4,5 \
     --models logistic_regression,random_forest,gradient_boosting,mlp \
-    --output-dir results/uspto_prediction \
-    --summary-output results/uspto_prediction/metrics_all_radii.csv \
+    --output-dir results/uspto_prediction/fp1024 \
+    --summary-output results/uspto_prediction/fp1024/metrics_all_radii.csv \
     --save-meta
 ```
 
@@ -207,8 +237,8 @@ python src/morganrxn/paper_results/metanetx_ec_prediction.py \
     --feature-sets reaction_ecfp,reaction_center_ecfp,both \
     --sample-mode unique_rules \
     --n-jobs 16 \
-    --output-dir results/metanetx_ec_prediction \
-    --summary-output results/metanetx_ec_prediction/metrics_all_ec_levels_all_radii.csv \
+    --output-dir results/metanetx_ec_prediction/fp1024 \
+    --summary-output results/metanetx_ec_prediction/fp1024/metrics_all_ec_levels_all_radii.csv \
     --save-meta
 ```
 
